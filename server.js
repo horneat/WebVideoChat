@@ -99,6 +99,15 @@ io.on('connection', (socket) => {
       socket.to(data.roomId).emit('reconnect-user', data.userId);
     });
 
+    // Handle remote audio toggle (mute/unmute)
+    socket.on('remote-audio-toggle', (data) => {
+      console.log(`User ${data.userId} ${data.muted ? 'muted' : 'unmuted'} their audio in room ${data.roomId}`);
+      socket.to(data.roomId).emit('remote-audio-toggle', {
+        userId: data.userId,
+        muted: data.muted
+      });
+    });
+
     // WebRTC signaling handlers
     socket.on('offer', (data) => {
       console.log(`Offer from ${data.userId} to room ${roomId}`);
@@ -115,10 +124,12 @@ io.on('connection', (socket) => {
     });
 
     socket.on('chat-message', (data) => {
+      console.log(`Chat message from ${data.userId} in room ${roomId}: ${data.message}`);
       io.to(roomId).emit('chat-message', {
         userId: data.userId || userId,
         message: data.message,
-        timestamp: new Date().toLocaleTimeString()
+        messageId: data.messageId, // Include message ID to prevent duplicates
+        timestamp: data.timestamp || new Date().toLocaleTimeString()
       });
     });
 

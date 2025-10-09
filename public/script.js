@@ -33,6 +33,9 @@ class VideoChat {
         this.statsInterval = null;
         this.reconnectionAttempts = 0;
         this.maxReconnectionAttempts = 5;
+        this.isRemoteAudioMuted = false;
+        this.isLocalAudioMuted = false;
+        this.mediaAccessGranted = false;
         
         this.initializeElements();
         this.setupEventListeners();
@@ -111,8 +114,8 @@ class VideoChat {
     }
 
     setupEventListeners() {
-        this.muteBtn.addEventListener('click', () => this.toggleAudio());
-        this.selfMuteBtn.addEventListener('click', () => this.toggleSelfMute());
+        this.muteBtn.addEventListener('click', () => this.toggleRemoteAudio());
+        this.selfMuteBtn.addEventListener('click', () => this.toggleLocalAudio());
         this.videoBtn.addEventListener('click', () => this.toggleVideo());
         this.qualityBtn.addEventListener('click', () => this.toggleQualityMode());
         this.shareBtn.addEventListener('click', () => this.shareLink());
@@ -124,7 +127,11 @@ class VideoChat {
 
     async initiateConnection() {
         try {
+            // First get media permissions
             await this.initializeMedia();
+            this.mediaAccessGranted = true;
+            
+            // Then setup WebRTC connection
             this.createPeerConnection();
             this.socket.emit('join-room', this.roomId, this.userId);
             this.updateConnectionStatus('connecting');
@@ -253,7 +260,7 @@ class VideoChat {
         this.remoteStream = new MediaStream();
         this.remoteVideo.srcObject = this.remoteStream;
 
-        // Add local tracks to peer connection
+        // Add local tracks to peer connection only if media is granted
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => {
                 console.log('Adding local track:', track.kind);
@@ -331,8 +338,10 @@ class VideoChat {
                     this.statsInterval = null;
                 }
                 
-                // Attempt reconnection
-                this.scheduleReconnection();
+                // Attempt reconnection only if media was granted
+                if (this.mediaAccessGranted) {
+                    this.scheduleReconnection();
+                }
             }
         };
 
@@ -362,7 +371,7 @@ class VideoChat {
             console.log(`Scheduling reconnection attempt ${this.reconnectionAttempts} in ${delay}ms`);
             
             setTimeout(() => {
-                if (!this.isConnected) {
+                if (!this.isConnected && this.mediaAccessGranted) {
                     this.reconnectWebRTC();
                 }
             }, delay);
@@ -449,7 +458,8 @@ class VideoChat {
         if (this.peerConnection && 
             this.peerConnection.connectionState === 'disconnected' && 
             !this.isConnected &&
-            this.reconnectionAttempts < this.maxReconnectionAttempts) {
+            this.reconnectionAttempts < this.maxReconnectionAttempts &&
+            this.mediaAccessGranted) {
             console.log('Attempting to reconnect...');
             this.reconnectWebRTC();
         }
@@ -520,16 +530,19 @@ class VideoChat {
     }
 
     setupSocketEvents() {
-	this.socket.on('chat-message', (data) => {
-        // Only display if the message is from another user
-        if (data.userId !== this.userId) {
-            const displayName = window.languageManager.translate('partner');
-            this.displayMessage(displayName, data.message, data.timestamp);
-        }
-        // If it's our own message, we already displayed it locally
-    	});
+        this.socket.on('user-connected', async (userId) => {
+            console.log('User connected:', userId);
+            // Only create offer if we're not already connected and media is granted
+            if (!this.isConnected && this.mediaAccessGranted) {
+                await this.createOffer();
+            }
+        });
+
         this.socket.on('offer', async (data) => {
-            await this.handleOffer(data);
+            // Only handle offer if media is granted
+            if (this.mediaAccessGranted) {
+                await this.handleOffer(data);
+            }
         });
 
         this.socket.on('answer', async (data) => {
@@ -553,35 +566,49 @@ class VideoChat {
 
         this.socket.on('reconnect-user', (userId) => {
             console.log('Reconnect requested for:', userId);
-            if (!this.isConnected) {
+            if (!this.isConnected && this.mediaAccessGranted) {
                 this.reconnectWebRTC();
             }
         });
 
         this.socket.on('user-reconnected', (userId) => {
             console.log('User reconnected:', userId);
-            if (!this.isConnected) {
+            if (!this.isConnected && this.mediaAccessGranted) {
                 this.createOffer();
             }
         });
 
+        // Fix for duplicate chat messages - use message IDs
         this.socket.on('chat-message', (data) => {
-            const displayName = data.userId === this.userId ? window.languageManager.translate('you') : window.languageManager.translate('partner');
-            this.displayMessage(displayName, data.message, data.timestamp);
+            // Only display if the message is from another user AND has a different messageId
+            if (data.userId !== this.userId) {
+                const displayName = window.languageManager.translate('partner');
+                this.displayMessage(displayName, data.message, data.timestamp, data.messageId);
+            }
+            // If it's our own message, we already displayed it locally
         });
 
         // Handle page refresh/reconnection
         this.socket.on('connect', () => {
             console.log('Socket reconnected');
-            // Rejoin the room when socket reconnects
-            this.socket.emit('rejoin-room', {
-                roomId: this.roomId,
-                userId: this.userId
-            });
-            
-            if (this.peerConnection && this.peerConnection.connectionState === 'disconnected') {
-                this.reconnectWebRTC();
+            // Rejoin the room when socket reconnects only if media was granted
+            if (this.mediaAccessGranted) {
+                this.socket.emit('rejoin-room', {
+                    roomId: this.roomId,
+                    userId: this.userId
+                });
+                
+                if (this.peerConnection && this.peerConnection.connectionState === 'disconnected') {
+                    this.reconnectWebRTC();
+                }
             }
+        });
+
+        // Handle mute/unmute commands from partner
+        this.socket.on('remote-audio-toggle', (data) => {
+            this.isRemoteAudioMuted = data.muted;
+            const message = data.muted ? 'Partner muted audio' : 'Partner unmuted audio';
+            this.displayMessage('System', message, new Date().toLocaleTimeString());
         });
     }
 
@@ -614,8 +641,8 @@ class VideoChat {
 
     async createOffer() {
         try {
-            // Don't create offer if already connected
-            if (this.isConnected) {
+            // Don't create offer if already connected or media not granted
+            if (this.isConnected || !this.mediaAccessGranted) {
                 return;
             }
             
@@ -636,8 +663,8 @@ class VideoChat {
 
     async handleOffer(data) {
         try {
-            // Don't handle offer if already connected
-            if (this.isConnected) {
+            // Don't handle offer if already connected or media not granted
+            if (this.isConnected || !this.mediaAccessGranted) {
                 return;
             }
             
@@ -686,30 +713,43 @@ class VideoChat {
         }
     }
 
-    toggleAudio() {
-        if (this.localStream) {
-            const audioTrack = this.localStream.getAudioTracks()[0];
-            if (audioTrack) {
-                audioTrack.enabled = !audioTrack.enabled;
-                const isMuted = !audioTrack.enabled;
-                this.muteBtn.textContent = isMuted ? '🔊 ' + window.languageManager.translate('unmute') : '🔇 ' + window.languageManager.translate('mute');
-                this.muteBtn.classList.toggle('active', isMuted);
-                const message = isMuted ? 'audioMuted' : 'audioUnmuted';
-                this.displayMessage('System', window.languageManager.translate(message), new Date().toLocaleTimeString());
+    // Mute partner's audio (toggle remote audio)
+    toggleRemoteAudio() {
+        if (this.remoteStream) {
+            const audioTracks = this.remoteStream.getAudioTracks();
+            if (audioTracks.length > 0) {
+                audioTracks.forEach(track => {
+                    track.enabled = !track.enabled;
+                });
+                this.isRemoteAudioMuted = !audioTracks[0].enabled;
+                this.muteBtn.textContent = this.isRemoteAudioMuted ? '🔊 Unmute Partner' : '🔇 Mute Partner';
+                this.muteBtn.classList.toggle('active', this.isRemoteAudioMuted);
+                
+                const message = this.isRemoteAudioMuted ? 'Partner audio muted' : 'Partner audio unmuted';
+                this.displayMessage('System', message, new Date().toLocaleTimeString());
             }
         }
     }
 
-    toggleSelfMute() {
+    // Mute own audio (prevent transmission to partner)
+    toggleLocalAudio() {
         if (this.localStream) {
             const audioTrack = this.localStream.getAudioTracks()[0];
             if (audioTrack) {
                 audioTrack.enabled = !audioTrack.enabled;
-                const isMuted = !audioTrack.enabled;
-                this.selfMuteBtn.textContent = isMuted ? '🎤 ' + window.languageManager.translate('selfUnmute') : '🤫 ' + window.languageManager.translate('selfMute');
-                this.selfMuteBtn.classList.toggle('active', isMuted);
-                const message = isMuted ? 'audioMuted' : 'audioUnmuted';
-                this.displayMessage('System', window.languageManager.translate(message), new Date().toLocaleTimeString());
+                this.isLocalAudioMuted = !audioTrack.enabled;
+                this.selfMuteBtn.textContent = this.isLocalAudioMuted ? '🎤 Unmute Self' : '🤫 Mute Self';
+                this.selfMuteBtn.classList.toggle('active', this.isLocalAudioMuted);
+                
+                const message = this.isLocalAudioMuted ? 'Your microphone muted' : 'Your microphone unmuted';
+                this.displayMessage('System', message, new Date().toLocaleTimeString());
+
+                // Notify partner about mute state
+                this.socket.emit('remote-audio-toggle', {
+                    roomId: this.roomId,
+                    userId: this.userId,
+                    muted: this.isLocalAudioMuted
+                });
             }
         }
     }
@@ -925,27 +965,46 @@ class VideoChat {
     }
 
     sendMessage() {
-    const message = this.chatInput.value.trim();
-    if (message) {
-        // Clear input immediately to prevent double sending
-        this.chatInput.value = '';
-        
-        // Display the message locally immediately
-        this.displayMessage(window.languageManager.translate('you'), message, new Date().toLocaleTimeString());
-        
-        // Send to other users
-        this.socket.emit('chat-message', {
-            message: message,
-            roomId: this.roomId,
-            userId: this.userId
-        });
+        const message = this.chatInput.value.trim();
+        if (message) {
+            // Generate unique message ID
+            const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+            
+            // Clear input immediately
+            this.chatInput.value = '';
+            
+            // Display the message locally immediately with ID
+            this.displayMessage(
+                window.languageManager.translate('you'), 
+                message, 
+                new Date().toLocaleTimeString(),
+                messageId
+            );
+            
+            // Send to other users with ID
+            this.socket.emit('chat-message', {
+                message: message,
+                roomId: this.roomId,
+                userId: this.userId,
+                messageId: messageId,
+                timestamp: new Date().toLocaleTimeString()
+            });
+        }
     }
-}
 
-
-    displayMessage(user, message, timestamp) {
+    displayMessage(user, message, timestamp, messageId = null) {
+        // Generate ID if not provided
+        const id = messageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Check if message with this ID already exists (prevent duplicates)
+        const existingMessage = document.querySelector(`[data-message-id="${id}"]`);
+        if (existingMessage) {
+            return; // Message already displayed
+        }
+        
         const messageElement = document.createElement('div');
         messageElement.className = 'chat-message';
+        messageElement.setAttribute('data-message-id', id);
         messageElement.innerHTML = `
             <span class="user">${user}:</span>
             <span class="message">${message}</span>
