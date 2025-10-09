@@ -520,14 +520,14 @@ class VideoChat {
     }
 
     setupSocketEvents() {
-        this.socket.on('user-connected', async (userId) => {
-            console.log('User connected:', userId);
-            // Only create offer if we're not already connected
-            if (!this.isConnected) {
-                await this.createOffer();
-            }
-        });
-
+	this.socket.on('chat-message', (data) => {
+        // Only display if the message is from another user
+        if (data.userId !== this.userId) {
+            const displayName = window.languageManager.translate('partner');
+            this.displayMessage(displayName, data.message, data.timestamp);
+        }
+        // If it's our own message, we already displayed it locally
+    	});
         this.socket.on('offer', async (data) => {
             await this.handleOffer(data);
         });
@@ -925,17 +925,23 @@ class VideoChat {
     }
 
     sendMessage() {
-        const message = this.chatInput.value.trim();
-        if (message) {
-            this.socket.emit('chat-message', {
-                message: message,
-                roomId: this.roomId,
-                userId: this.userId
-            });
-            this.displayMessage(window.languageManager.translate('you'), message, new Date().toLocaleTimeString());
-            this.chatInput.value = '';
-        }
+    const message = this.chatInput.value.trim();
+    if (message) {
+        // Clear input immediately to prevent double sending
+        this.chatInput.value = '';
+        
+        // Display the message locally immediately
+        this.displayMessage(window.languageManager.translate('you'), message, new Date().toLocaleTimeString());
+        
+        // Send to other users
+        this.socket.emit('chat-message', {
+            message: message,
+            roomId: this.roomId,
+            userId: this.userId
+        });
     }
+}
+
 
     displayMessage(user, message, timestamp) {
         const messageElement = document.createElement('div');

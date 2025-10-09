@@ -1,6 +1,0 @@
-tunnels:
-  video-chat:
-    proto: http
-    addr: 3000
-    host_header: "localhost:3000"
-    bind_tls: true
