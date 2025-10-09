@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  video-chat:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"  # Fixed port mapping
+    environment:
+      - PORT=3000    # Explicitly set PORT environment variable
+      - NODE_ENV=production
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
