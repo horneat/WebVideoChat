@@ -26,7 +26,18 @@ class VideoChat {
         this.localStream = null;
         this.remoteStream = null;
         this.peerConnection = null;
-        this.roomId = window.location.pathname.split('/').pop();
+        
+        // Get room ID from URL path - FIXED
+        const pathParts = window.location.pathname.split('/');
+        this.roomId = pathParts[pathParts.length - 1];
+        
+        // Validate room ID
+        if (!this.roomId || this.roomId === 'chat') {
+            console.error('Invalid room ID, redirecting to lounge');
+            window.location.href = '/lounge?error=InvalidRoom';
+            return;
+        }
+        
         this.userId = this.generateUserId();
         this.isConnected = false;
         this.qualityMode = 'balanced';
@@ -36,6 +47,8 @@ class VideoChat {
         this.isRemoteAudioMuted = false;
         this.isLocalAudioMuted = false;
         this.mediaAccessGranted = false;
+        
+        console.log('Initializing video chat for room:', this.roomId);
         
         this.initializeElements();
         this.setupEventListeners();
@@ -104,13 +117,23 @@ class VideoChat {
         this.videoBtn = document.getElementById('videoBtn');
         this.qualityBtn = document.getElementById('qualityBtn');
         this.shareBtn = document.getElementById('shareBtn');
+        this.leaveBtn = document.getElementById('leaveBtn');
+        this.endCallBtn = document.getElementById('endCallBtn');
         this.chatInput = document.getElementById('chatInput');
         this.sendBtn = document.getElementById('sendBtn');
         this.chatMessages = document.getElementById('chatMessages');
         this.remoteLabel = document.getElementById('remoteLabel');
         this.qualityIndicator = document.getElementById('qualityIndicator');
-        this.statsPanel = document.getElementById('statsPanel');
         this.connectionStatus = document.getElementById('connectionStatus');
+        this.languageSelect = document.getElementById('languageSelect');
+        
+        // Setup language selector if it exists
+        if (this.languageSelect) {
+            this.languageSelect.value = window.languageManager.currentLanguage;
+            this.languageSelect.addEventListener('change', (e) => {
+                window.languageManager.changeLanguage(e.target.value);
+            });
+        }
     }
 
     setupEventListeners() {
@@ -119,10 +142,50 @@ class VideoChat {
         this.videoBtn.addEventListener('click', () => this.toggleVideo());
         this.qualityBtn.addEventListener('click', () => this.toggleQualityMode());
         this.shareBtn.addEventListener('click', () => this.shareLink());
+        this.leaveBtn.addEventListener('click', () => this.leaveRoom());
+        this.endCallBtn.addEventListener('click', () => this.endCall());
         this.sendBtn.addEventListener('click', () => this.sendMessage());
         this.chatInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.sendMessage();
         });
+    }
+
+    updateControlTexts() {
+        if (!window.languageManager) return;
+        
+        // Update mute buttons
+        this.muteBtn.textContent = this.isRemoteAudioMuted ? 
+            '🔊 ' + window.languageManager.translate('unmute') : 
+            '🔇 ' + window.languageManager.translate('mute');
+        
+        this.selfMuteBtn.textContent = this.isLocalAudioMuted ?
+            '🎤 ' + window.languageManager.translate('unmuteSelf') :
+            '🤫 ' + window.languageManager.translate('muteSelf');
+        
+        // Update video button
+        const videoTrack = this.localStream ? this.localStream.getVideoTracks()[0] : null;
+        const isVideoStopped = videoTrack ? !videoTrack.enabled : false;
+        this.videoBtn.textContent = isVideoStopped ? 
+            '📹 ' + window.languageManager.translate('startVideo') : 
+            '📹 ' + window.languageManager.translate('stopVideo');
+        
+        // Update other buttons
+        this.leaveBtn.textContent = '🚪 ' + window.languageManager.translate('leaveRoom');
+        this.endCallBtn.textContent = '📞 ' + window.languageManager.translate('endCall');
+        this.shareBtn.textContent = '🔗 ' + window.languageManager.translate('copyLink');
+        
+        // Update quality button
+        const modeNames = {
+            'balanced': 'balanced',
+            'quality': 'highQuality', 
+            'bandwidth': 'lowBandwidth'
+        };
+        const qualityText = window.languageManager.translate('quality');
+        const modeText = window.languageManager.translate(modeNames[this.qualityMode]);
+        this.qualityBtn.textContent = `⚡ ${qualityText}: ${modeText}`;
+        
+        // Update labels
+        this.updateRemoteLabel(this.isConnected ? 'partner' : 'waitingPartner');
     }
 
     async initiateConnection() {
@@ -138,6 +201,7 @@ class VideoChat {
             this.setupReconnectionHandling();
             this.setupLocalVideoDragAndResize();
             this.setupScreenSizeControls();
+            this.updateControlTexts();
             
         } catch (error) {
             console.error('Error initiating connection:', error);
@@ -150,90 +214,47 @@ class VideoChat {
             console.log('Requesting camera and microphone access...');
             
             const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
             
-            // Optimized video constraints for better quality/bandwidth balance
-            const videoConstraints = {
-                // Resolution - balance between quality and bandwidth
-                width: { ideal: 1280, max: 1920 },
-                height: { ideal: 720, max: 1080 },
-                
-                // Frame rate - crucial for bandwidth
-                frameRate: { ideal: 30, max: 30 },
-                
-                // Device selection
-                facingMode: 'user',
-                
-                // Bitrate control through constraints
-                aspectRatio: 16/9
+            // Simplified constraints for better compatibility
+            const constraints = {
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    frameRate: { ideal: 24 }
+                },
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
             };
 
             // Mobile-specific optimizations
             if (isMobile) {
-                videoConstraints.width = { ideal: 640, max: 1280 };
-                videoConstraints.height = { ideal: 480, max: 720 };
-                videoConstraints.frameRate = { ideal: 24, max: 30 };
+                constraints.video = {
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                    frameRate: { ideal: 24 }
+                };
             }
 
-            // High-quality audio constraints
-            const audioConstraints = {
-                // Audio quality settings
-                channelCount: 2, // Stereo for better quality
-                sampleRate: 48000, // Higher sample rate for better quality
-                sampleSize: 16,
-                
-                // Noise processing
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                
-                // Latency optimization
-                latency: 0.01,
-                volume: 1.0
-            };
-
-            const constraints = {
-                video: videoConstraints,
-                audio: audioConstraints
-            };
-            
-            console.log('Using constraints:', constraints);
             this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
             
             console.log('Camera and microphone access granted');
             this.localVideo.srcObject = this.localStream;
             
-            // Log the actual settings obtained
-            const videoTrack = this.localStream.getVideoTracks()[0];
-            const audioTrack = this.localStream.getAudioTracks()[0];
-            if (videoTrack) {
-                const settings = videoTrack.getSettings();
-                console.log('Actual video settings:', settings);
-            }
-            if (audioTrack) {
-                const settings = audioTrack.getSettings();
-                console.log('Actual audio settings:', settings);
-            }
-            
         } catch (error) {
             console.error('Error accessing media devices:', error);
             
             try {
-                console.log('Trying with simpler constraints...');
-                // Fallback with still decent quality
+                console.log('Trying with basic constraints...');
+                // Fallback with basic constraints
                 this.localStream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 },
-                        frameRate: { ideal: 24 }
-                    },
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true
-                    }
+                    video: true,
+                    audio: true
                 });
                 
-                console.log('Camera and microphone access granted with fallback constraints');
+                console.log('Camera and microphone access granted with basic constraints');
                 this.localVideo.srcObject = this.localStream;
                 
             } catch (fallbackError) {
@@ -250,8 +271,7 @@ class VideoChat {
                 { urls: 'stun:stun1.l.google.com:19302' },
                 { urls: 'stun:stun2.l.google.com:19302' }
             ],
-            iceCandidatePoolSize: 10,
-            iceTransportPolicy: 'all'
+            iceCandidatePoolSize: 10
         };
 
         this.peerConnection = new RTCPeerConnection(configuration);
@@ -260,35 +280,33 @@ class VideoChat {
         this.remoteStream = new MediaStream();
         this.remoteVideo.srcObject = this.remoteStream;
 
-        // Add local tracks to peer connection only if media is granted
+        // Add local tracks to peer connection
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => {
                 console.log('Adding local track:', track.kind);
-                const sender = this.peerConnection.addTrack(track, this.localStream);
-                
-                // Configure video sender for better quality/bandwidth balance
-                if (track.kind === 'video') {
-                    this.configureVideoSender(sender);
-                }
+                this.peerConnection.addTrack(track, this.localStream);
             });
         }
 
-        // Handle incoming remote tracks - FIXED VERSION
+        // Handle incoming remote tracks
         this.peerConnection.ontrack = (event) => {
-            console.log('Received remote track:', event.track.kind, event.track.id);
+            console.log('Received remote track:', event.track.kind);
             
-            // Reset reconnection attempts on successful connection
             this.reconnectionAttempts = 0;
             
             // Add track to our remote stream
             if (event.streams && event.streams[0]) {
-                console.log('Using stream from event:', event.streams[0].id);
                 this.remoteVideo.srcObject = event.streams[0];
             } else {
-                console.log('Adding track to remote stream');
                 this.remoteStream.addTrack(event.track);
                 this.remoteVideo.srcObject = this.remoteStream;
             }
+            
+            // Ensure audio is not muted when new stream is received
+            this.remoteVideo.muted = false;
+            this.isRemoteAudioMuted = false;
+            this.muteBtn.textContent = '🔇 ' + window.languageManager.translate('mute');
+            this.muteBtn.classList.remove('active');
             
             // Set up track ended handler
             event.track.onended = () => {
@@ -310,12 +328,13 @@ class VideoChat {
             if (event.candidate) {
                 this.socket.emit('ice-candidate', {
                     candidate: event.candidate,
-                    roomId: this.roomId
+                    roomId: this.roomId,
+                    userId: this.userId
                 });
             }
         };
 
-        // Handle connection state changes for better reconnection
+        // Handle connection state changes
         this.peerConnection.onconnectionstatechange = () => {
             const state = this.peerConnection.connectionState;
             console.log('Connection state:', state);
@@ -332,13 +351,11 @@ class VideoChat {
                 this.updateQualityIndicator('Offline', 'quality-low');
                 this.isConnected = false;
                 
-                // Stop stats monitoring
                 if (this.statsInterval) {
                     clearInterval(this.statsInterval);
                     this.statsInterval = null;
                 }
                 
-                // Attempt reconnection only if media was granted
                 if (this.mediaAccessGranted) {
                     this.scheduleReconnection();
                 }
@@ -356,7 +373,11 @@ class VideoChat {
         this.updateQualityIndicator('Offline', 'quality-low');
         this.isConnected = false;
         
-        // Stop stats monitoring
+        // Reset mute state when partner disconnects
+        this.isRemoteAudioMuted = false;
+        this.muteBtn.textContent = '🔇 ' + window.languageManager.translate('mute');
+        this.muteBtn.classList.remove('active');
+        
         if (this.statsInterval) {
             clearInterval(this.statsInterval);
             this.statsInterval = null;
@@ -366,7 +387,7 @@ class VideoChat {
     scheduleReconnection() {
         if (this.reconnectionAttempts < this.maxReconnectionAttempts) {
             this.reconnectionAttempts++;
-            const delay = Math.min(1000 * Math.pow(2, this.reconnectionAttempts), 10000); // Exponential backoff
+            const delay = Math.min(1000 * Math.pow(2, this.reconnectionAttempts), 10000);
             
             console.log(`Scheduling reconnection attempt ${this.reconnectionAttempts} in ${delay}ms`);
             
@@ -381,165 +402,20 @@ class VideoChat {
         }
     }
 
-    configureVideoSender(sender) {
-        // Wait for negotiation to complete
-        setTimeout(() => {
-            try {
-                const parameters = sender.getParameters();
-                if (!parameters.encodings) {
-                    parameters.encodings = [{}];
-                }
-                
-                // Optimized video encoding parameters
-                parameters.encodings[0] = {
-                    // Adaptive bitrate settings
-                    maxBitrate: 1500000, // 1.5 Mbps - good quality within reasonable bandwidth
-                    maxFramerate: 30,
-                    
-                    // Scale resolution - 1.0 means full resolution
-                    scaleResolutionDownBy: 1.0,
-                    
-                    // Adaptive settings
-                    adaptivePtime: false,
-                    priority: 'high',
-                    networkPriority: 'high'
-                };
-                
-                // Codec preferences - prefer H.264 for better compression
-                parameters.codecs = [
-                    {
-                        mimeType: 'video/H264',
-                        clockRate: 90000,
-                        // H.264 profile for better compression
-                        profileLevelId: '42e01f' // Baseline profile, level 3.1
-                    },
-                    {
-                        mimeType: 'video/VP8',
-                        clockRate: 90000
-                    },
-                    {
-                        mimeType: 'video/VP9',
-                        clockRate: 90000
-                    }
-                ];
-                
-                sender.setParameters(parameters);
-                console.log('Video sender configured with optimized settings');
-                
-            } catch (error) {
-                console.warn('Could not configure video sender parameters:', error);
-            }
-        }, 1000);
-    }
-
-    setupReconnectionHandling() {
-        // Handle page refresh/beforeunload
-        window.addEventListener('beforeunload', () => {
-            if (this.socket) {
-                this.socket.emit('user-leaving', {
-                    roomId: this.roomId,
-                    userId: this.userId
-                });
-            }
-        });
-
-        // Handle page visibility change (tab switch)
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                console.log('Page hidden');
-            } else {
-                console.log('Page visible - checking connection');
-                this.checkAndReconnect();
-            }
-        });
-    }
-
-    checkAndReconnect() {
-        if (this.peerConnection && 
-            this.peerConnection.connectionState === 'disconnected' && 
-            !this.isConnected &&
-            this.reconnectionAttempts < this.maxReconnectionAttempts &&
-            this.mediaAccessGranted) {
-            console.log('Attempting to reconnect...');
-            this.reconnectWebRTC();
-        }
-    }
-
-    startStatsMonitoring() {
-        if (this.statsInterval) clearInterval(this.statsInterval);
-        
-        this.statsInterval = setInterval(async () => {
-            if (this.peerConnection && this.peerConnection.connectionState === 'connected') {
-                try {
-                    const stats = await this.peerConnection.getStats();
-                    this.updateStatsDisplay(stats);
-                } catch (error) {
-                    console.log('Stats error:', error);
-                }
-            }
-        }, 2000);
-    }
-
-    updateStatsDisplay(stats) {
-        let inboundVideo = null;
-        let outboundVideo = null;
-        
-        stats.forEach(report => {
-            if (report.type === 'inbound-rtp' && report.kind === 'video') {
-                inboundVideo = report;
-            }
-            if (report.type === 'outbound-rtp' && report.kind === 'video') {
-                outboundVideo = report;
-            }
-        });
-        
-        // Update stats panel
-        if (inboundVideo) {
-            const bitrate = Math.round((inboundVideo.bytesReceived / 1024) * 8) + ' kbps';
-            const resolution = `${inboundVideo.frameWidth || 0}x${inboundVideo.frameHeight || 0}`;
-            const fps = inboundVideo.framesPerSecond || 0;
-            const packets = inboundVideo.packetsReceived || 0;
-            
-            document.getElementById('bitrateStat').textContent = bitrate;
-            document.getElementById('resolutionStat').textContent = resolution;
-            document.getElementById('fpsStat').textContent = fps;
-            document.getElementById('packetsStat').textContent = packets;
-        }
-    }
-
-    updateConnectionStatus(statusKey) {
-        if (this.connectionStatus) {
-            const statusText = window.languageManager.translate(statusKey);
-            this.connectionStatus.textContent = statusText;
-            this.connectionStatus.style.display = statusKey !== 'connected' ? 'block' : 'none';
-            this.connectionStatus.className = `status ${statusKey}`;
-        }
-    }
-
-    updateRemoteLabel(labelKey) {
-        if (this.remoteLabel) {
-            this.remoteLabel.textContent = window.languageManager.translate(labelKey);
-        }
-    }
-
-    updateQualityIndicator(text, className) {
-        if (this.qualityIndicator) {
-            this.qualityIndicator.textContent = text;
-            this.qualityIndicator.className = `quality-indicator ${className}`;
-        }
-    }
-
     setupSocketEvents() {
         this.socket.on('user-connected', async (userId) => {
             console.log('User connected:', userId);
-            // Only create offer if we're not already connected and media is granted
             if (!this.isConnected && this.mediaAccessGranted) {
                 await this.createOffer();
             }
+            
+            // Reset mute state when new partner connects
+            this.isRemoteAudioMuted = false;
+            this.muteBtn.textContent = '🔇 ' + window.languageManager.translate('mute');
+            this.muteBtn.classList.remove('active');
         });
 
         this.socket.on('offer', async (data) => {
-            // Only handle offer if media is granted
             if (this.mediaAccessGranted) {
                 await this.handleOffer(data);
             }
@@ -561,37 +437,30 @@ class VideoChat {
 
         this.socket.on('user-left', (userId) => {
             console.log('User left:', userId);
+            this.handleRemoteDisconnect();
             this.displayMessage('System', window.languageManager.translate('partnerDisconnected'), new Date().toLocaleTimeString());
         });
 
-        this.socket.on('reconnect-user', (userId) => {
-            console.log('Reconnect requested for:', userId);
-            if (!this.isConnected && this.mediaAccessGranted) {
-                this.reconnectWebRTC();
-            }
+        this.socket.on('redirect-to-lounge', () => {
+            window.location.href = '/lounge?success=conversationEnded';
         });
 
-        this.socket.on('user-reconnected', (userId) => {
-            console.log('User reconnected:', userId);
-            if (!this.isConnected && this.mediaAccessGranted) {
-                this.createOffer();
-            }
+        this.socket.on('conversation-ended', (data) => {
+            this.displayMessage('System', data.message, new Date().toLocaleTimeString());
+            setTimeout(() => {
+                window.location.href = '/lounge?success=conversationEnded';
+            }, 2000);
         });
 
-        // Fix for duplicate chat messages - use message IDs
         this.socket.on('chat-message', (data) => {
-            // Only display if the message is from another user AND has a different messageId
             if (data.userId !== this.userId) {
                 const displayName = window.languageManager.translate('partner');
                 this.displayMessage(displayName, data.message, data.timestamp, data.messageId);
             }
-            // If it's our own message, we already displayed it locally
         });
 
-        // Handle page refresh/reconnection
         this.socket.on('connect', () => {
             console.log('Socket reconnected');
-            // Rejoin the room when socket reconnects only if media was granted
             if (this.mediaAccessGranted) {
                 this.socket.emit('rejoin-room', {
                     roomId: this.roomId,
@@ -604,7 +473,14 @@ class VideoChat {
             }
         });
 
-        // Handle mute/unmute commands from partner
+        this.socket.on('user-reconnected', (userId) => {
+            console.log('User reconnected:', userId);
+            // Reset mute state when partner reconnects
+            this.isRemoteAudioMuted = false;
+            this.muteBtn.textContent = '🔇 ' + window.languageManager.translate('mute');
+            this.muteBtn.classList.remove('active');
+        });
+
         this.socket.on('remote-audio-toggle', (data) => {
             this.isRemoteAudioMuted = data.muted;
             const message = data.muted ? 'Partner muted audio' : 'Partner unmuted audio';
@@ -615,21 +491,17 @@ class VideoChat {
     async reconnectWebRTC() {
         console.log('Attempting WebRTC reconnection...');
         try {
-            // Clean up old connection
             if (this.peerConnection) {
                 this.peerConnection.close();
             }
             
-            // Create new connection
             this.createPeerConnection();
             
-            // Notify other user about reconnection
             this.socket.emit('user-reconnected', {
                 roomId: this.roomId,
                 userId: this.userId
             });
             
-            // Wait a bit before creating offer
             setTimeout(async () => {
                 await this.createOffer();
             }, 1000);
@@ -641,7 +513,6 @@ class VideoChat {
 
     async createOffer() {
         try {
-            // Don't create offer if already connected or media not granted
             if (this.isConnected || !this.mediaAccessGranted) {
                 return;
             }
@@ -652,7 +523,8 @@ class VideoChat {
             
             this.socket.emit('offer', {
                 offer: offer,
-                roomId: this.roomId
+                roomId: this.roomId,
+                userId: this.userId
             });
             console.log('Offer sent');
             
@@ -663,7 +535,6 @@ class VideoChat {
 
     async handleOffer(data) {
         try {
-            // Don't handle offer if already connected or media not granted
             if (this.isConnected || !this.mediaAccessGranted) {
                 return;
             }
@@ -676,11 +547,11 @@ class VideoChat {
             
             this.socket.emit('answer', {
                 answer: answer,
-                roomId: this.roomId
+                roomId: this.roomId,
+                userId: this.userId
             });
             console.log('Answer sent');
             
-            // Force connection state update
             setTimeout(() => {
                 if (this.peerConnection.connectionState === 'connected') {
                     this.updateConnectionStatus('connected');
@@ -713,21 +584,27 @@ class VideoChat {
         }
     }
 
-    // Mute partner's audio (toggle remote audio)
+    // Mute partner's audio (toggle remote audio) - FIXED VERSION
     toggleRemoteAudio() {
-        if (this.remoteStream) {
-            const audioTracks = this.remoteStream.getAudioTracks();
-            if (audioTracks.length > 0) {
-                audioTracks.forEach(track => {
-                    track.enabled = !track.enabled;
-                });
-                this.isRemoteAudioMuted = !audioTracks[0].enabled;
-                this.muteBtn.textContent = this.isRemoteAudioMuted ? '🔊 Unmute Partner' : '🔇 Mute Partner';
-                this.muteBtn.classList.toggle('active', this.isRemoteAudioMuted);
-                
-                const message = this.isRemoteAudioMuted ? 'Partner audio muted' : 'Partner audio unmuted';
-                this.displayMessage('System', message, new Date().toLocaleTimeString());
-            }
+        if (this.remoteVideo && this.remoteVideo.srcObject) {
+            // Toggle the muted state of the remote video element
+            this.remoteVideo.muted = !this.remoteVideo.muted;
+            this.isRemoteAudioMuted = this.remoteVideo.muted;
+            
+            // Update button text using language manager
+            this.muteBtn.textContent = this.isRemoteAudioMuted ? 
+                '🔊 ' + window.languageManager.translate('unmute') : 
+                '🔇 ' + window.languageManager.translate('mute');
+            this.muteBtn.classList.toggle('active', this.isRemoteAudioMuted);
+            
+            const message = this.isRemoteAudioMuted ? 
+                'Partner audio muted' : 
+                'Partner audio unmuted';
+            this.displayMessage('System', message, new Date().toLocaleTimeString());
+            
+            console.log(`Partner audio ${this.isRemoteAudioMuted ? 'muted' : 'unmuted'}`);
+        } else {
+            this.displayMessage('System', 'No partner connected', new Date().toLocaleTimeString());
         }
     }
 
@@ -738,7 +615,11 @@ class VideoChat {
             if (audioTrack) {
                 audioTrack.enabled = !audioTrack.enabled;
                 this.isLocalAudioMuted = !audioTrack.enabled;
-                this.selfMuteBtn.textContent = this.isLocalAudioMuted ? '🎤 Unmute Self' : '🤫 Mute Self';
+                
+                // Update button text using language manager
+                this.selfMuteBtn.textContent = this.isLocalAudioMuted ?
+                    '🎤 ' + window.languageManager.translate('unmuteSelf') :
+                    '🤫 ' + window.languageManager.translate('muteSelf');
                 this.selfMuteBtn.classList.toggle('active', this.isLocalAudioMuted);
                 
                 const message = this.isLocalAudioMuted ? 'Your microphone muted' : 'Your microphone unmuted';
@@ -760,7 +641,9 @@ class VideoChat {
             if (videoTrack) {
                 videoTrack.enabled = !videoTrack.enabled;
                 const isStopped = !videoTrack.enabled;
-                this.videoBtn.textContent = isStopped ? '📹 ' + window.languageManager.translate('startVideo') : '📹 ' + window.languageManager.translate('stopVideo');
+                this.videoBtn.textContent = isStopped ? 
+                    '📹 ' + window.languageManager.translate('startVideo') : 
+                    '📹 ' + window.languageManager.translate('stopVideo');
                 this.videoBtn.classList.toggle('active', isStopped);
                 const message = isStopped ? 'videoStopped' : 'videoStarted';
                 this.displayMessage('System', window.languageManager.translate(message), new Date().toLocaleTimeString());
@@ -827,6 +710,27 @@ class VideoChat {
                 }
             }
         });
+    }
+
+    // Room control functions
+    leaveRoom() {
+        if (confirm('Are you sure you want to leave the room?')) {
+            this.socket.emit('leave-room', {
+                roomId: this.roomId,
+                userId: this.userId
+            });
+            window.location.href = '/lounge';
+        }
+    }
+
+    endCall() {
+        if (confirm('Are you sure you want to end the conversation for everyone?')) {
+            this.socket.emit('end-conversation', {
+                roomId: this.roomId,
+                userId: this.userId
+            });
+            window.location.href = '/lounge?success=conversationEnded';
+        }
     }
 
     setupLocalVideoDragAndResize() {
@@ -1012,5 +916,94 @@ class VideoChat {
         `;
         this.chatMessages.appendChild(messageElement);
         this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+    }
+
+    updateConnectionStatus(statusKey) {
+        if (this.connectionStatus) {
+            const statusText = window.languageManager.translate(statusKey);
+            this.connectionStatus.textContent = statusText;
+            this.connectionStatus.style.display = statusKey !== 'connected' ? 'block' : 'none';
+            this.connectionStatus.className = `status ${statusKey}`;
+        }
+    }
+
+    updateRemoteLabel(labelKey) {
+        if (this.remoteLabel) {
+            this.remoteLabel.textContent = window.languageManager.translate(labelKey);
+        }
+    }
+
+    updateQualityIndicator(text, className) {
+        if (this.qualityIndicator) {
+            this.qualityIndicator.textContent = text;
+            this.qualityIndicator.className = `quality-indicator ${className}`;
+        }
+    }
+
+    setupReconnectionHandling() {
+        window.addEventListener('beforeunload', () => {
+            if (this.socket) {
+                this.socket.emit('user-leaving', {
+                    roomId: this.roomId,
+                    userId: this.userId
+                });
+            }
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                console.log('Page hidden');
+            } else {
+                console.log('Page visible');
+                if (!this.isConnected && this.mediaAccessGranted) {
+                    this.reconnectWebRTC();
+                }
+            }
+        });
+    }
+
+    startStatsMonitoring() {
+        if (this.statsInterval) {
+            clearInterval(this.statsInterval);
+        }
+
+        this.statsInterval = setInterval(async () => {
+            if (!this.peerConnection || this.peerConnection.connectionState !== 'connected') {
+                return;
+            }
+
+            try {
+                const stats = await this.peerConnection.getStats();
+                let videoStats = { framesPerSecond: 0, packetsLost: 0 };
+                let audioStats = { packetsLost: 0 };
+
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        videoStats.framesPerSecond = report.framesPerSecond || 0;
+                        videoStats.packetsLost = report.packetsLost || 0;
+                    }
+                    if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+                        audioStats.packetsLost = report.packetsLost || 0;
+                    }
+                });
+
+                // Update quality indicator based on stats
+                let qualityLevel = 'quality-medium';
+                let qualityText = 'SD';
+
+                if (videoStats.framesPerSecond >= 20 && videoStats.packetsLost < 10) {
+                    qualityLevel = 'quality-high';
+                    qualityText = 'HD';
+                } else if (videoStats.framesPerSecond < 10 || videoStats.packetsLost > 50) {
+                    qualityLevel = 'quality-low';
+                    qualityText = 'Low';
+                }
+
+                this.updateQualityIndicator(qualityText, qualityLevel);
+
+            } catch (error) {
+                console.error('Error getting stats:', error);
+            }
+        }, 2000);
     }
 }

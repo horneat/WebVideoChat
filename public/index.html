@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HD Video Chat</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Video Chat</title>
+    <link rel="stylesheet" href="/style.css">
+    <base href="/">
 </head>
 <body>
     <div class="container">
@@ -22,74 +23,78 @@
         <div class="main-layout">
             <!-- Left Side: Video Area -->
             <div class="video-section">
-                <div class="video-container ratio-9-16">
+                <div class="video-container ratio-auto">
                     <!-- Main Video - Remote User -->
                     <div class="video-wrapper main-video">
                         <video id="remoteVideo" autoplay playsinline></video>
-                        <div class="video-label" id="remoteLabel" data-i18n="waitingPartner">Waiting for partner...</div>
+                        <div class="video-label" id="remoteLabel">Waiting for partner...</div>
                         <div class="quality-indicator quality-high" id="qualityIndicator">HD</div>
                     </div>
                     
                     <!-- Preview Video - Local User (Small) -->
                     <div class="video-wrapper preview-video">
                         <video id="localVideo" autoplay muted playsinline></video>
-                        <div class="video-label" data-i18n="you">You</div>
+                        <div class="video-label">You</div>
                     </div>
                 </div>
 
                 <!-- Screen Size Controls -->
                 <div class="screen-size-controls">
-                    <button class="size-btn active" data-ratio="9-16">9:16</button>
+                    <button class="size-btn" data-ratio="9-16">9:16</button>
                     <button class="size-btn" data-ratio="16-9">16:9</button>
                     <button class="size-btn" data-ratio="1-1">1:1</button>
-                    <button class="size-btn" data-ratio="auto" data-i18n="auto">Auto</button>
+                    <button class="size-btn active" data-ratio="auto">Auto</button>
                 </div>
             </div>
 
             <!-- Right Side: Controls and Chat -->
             <div class="controls-section">
                 <!-- Connection Status -->
-                <div id="connectionStatus" class="status" style="display: none;" data-i18n="connecting">Connecting...</div>
+                <div id="connectionStatus" class="status" style="display: none;">Connecting...</div>
                 
                 <!-- Main Controls -->
                 <div class="controls-panel">
-                    <h3 data-i18n="controls">Controls</h3>
+                    <h3>Controls</h3>
                     <div class="control-buttons">
-                        <button id="muteBtn" class="control-btn" data-i18n="mute">🔇 Mute</button>
-                        <button id="selfMuteBtn" class="control-btn" data-i18n="selfMute">🤫 Self Mute</button>
-                        <button id="videoBtn" class="control-btn" data-i18n="stopVideo">📹 Stop Video</button>
-                        <button id="qualityBtn" class="control-btn">⚡ <span data-i18n="quality">Quality</span>: <span data-i18n="balanced">Balanced</span></button>
-                        <button id="shareBtn" class="control-btn" data-i18n="copyLink">🔗 Copy Link</button>
+                        <button id="muteBtn" class="control-btn">🔇 Mute Partner</button>
+                        <button id="selfMuteBtn" class="control-btn">🤫 Mute Self</button>
+                        <button id="videoBtn" class="control-btn">📹 Stop Video</button>
+                        <button id="qualityBtn" class="control-btn">⚡ Quality: Balanced</button>
+                        <button id="shareBtn" class="control-btn">🔗 Copy Link</button>
+                        <button id="leaveBtn" class="control-btn" style="background: #6c757d;">🚪 Leave</button>
+                        <button id="endCallBtn" class="control-btn" style="background: #dc3545;">📞 End Call</button>
                     </div>
                 </div>
 
                 <!-- Statistics Panel -->
                 <div class="stats-panel">
-                    <h3 data-i18n="statistics">Statistics</h3>
+                    <h3>Statistics</h3>
                     <div class="stats-content">
-                        <div class="stat"><span data-i18n="bitrate">Bitrate</span>: <span id="bitrateStat">-</span></div>
-                        <div class="stat"><span data-i18n="resolution">Resolution</span>: <span id="resolutionStat">-</span></div>
-                        <div class="stat"><span data-i18n="fps">FPS</span>: <span id="fpsStat">-</span></div>
-                        <div class="stat"><span data-i18n="packets">Packets</span>: <span id="packetsStat">-</span></div>
+                        <div class="stat">Bitrate: <span id="bitrateStat">-</span></div>
+                        <div class="stat">Resolution: <span id="resolutionStat">-</span></div>
+                        <div class="stat">FPS: <span id="fpsStat">-</span></div>
+                        <div class="stat">Packets: <span id="packetsStat">-</span></div>
                     </div>
                 </div>
 
                 <!-- Chat Section -->
                 <div class="chat-panel">
-                    <h3 data-i18n="chat">Chat</h3>
+                    <h3>Chat</h3>
                     <div class="chat-container">
                         <div id="chatMessages" class="chat-messages"></div>
                         <div class="chat-input-container">
-                            <input type="text" id="chatInput" placeholder="Type a message..." data-i18n-placeholder="typeMessage">
-                            <button id="sendBtn" data-i18n="send">Send</button>
+                            <input type="text" id="chatInput" placeholder="Type a message...">
+                            <button id="sendBtn">Send</button>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    <script src="languages.js"></script>
+
+    <!-- Scripts in correct order -->
     <script src="/socket.io/socket.io.js"></script>
+    <script src="languages.js"></script>
     <script src="script.js"></script>
 </body>
 </html>

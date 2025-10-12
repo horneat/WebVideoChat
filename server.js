@@ -15,46 +15,110 @@ const io = socketIo(server, {
   pingInterval: 25000
 });
 
-// Serve static files
+// Serve static files from public directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Store active rooms
+// Store active rooms with metadata
 const rooms = new Map();
 
+// Simple route handling
 app.get('/', (req, res) => {
-  const roomId = uuidv4();
-  rooms.set(roomId, new Set());
-  res.redirect(`/${roomId}`);
+  res.sendFile(path.join(__dirname, 'public', 'lounge.html'));
 });
 
-app.get('/:room', (req, res) => {
-  const roomId = req.params.room;
-  if (!rooms.has(roomId)) {
-    rooms.set(roomId, new Set());
-  }
+app.get('/lounge', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'lounge.html'));
+});
+
+app.get('/chat/:room', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.get('/chat', (req, res) => {
+  const newRoomId = uuidv4();
+  rooms.set(newRoomId, {
+    users: new Set(),
+    createdAt: Date.now(),
+    lastActivity: Date.now()
+  });
+  console.log(`New room created: ${newRoomId}`);
+  res.redirect(`/chat/${newRoomId}`);
+});
+
+// API endpoints
+app.get('/api/rooms', (req, res) => {
+  const roomInfo = {};
+  rooms.forEach((roomData, roomId) => {
+    roomInfo[roomId] = {
+      users: Array.from(roomData.users),
+      userCount: roomData.users.size,
+      createdAt: roomData.createdAt,
+      lastActivity: roomData.lastActivity
+    };
+  });
+  
+  res.json({
+    totalRooms: rooms.size,
+    activeUsers: Array.from(rooms.values()).reduce((sum, room) => sum + room.users.size, 0),
+    rooms: roomInfo
+  });
+});
+
+// Add this endpoint to check if room exists
+app.get('/api/room/:roomId', (req, res) => {
+  const roomId = req.params.roomId;
+  const exists = rooms.has(roomId);
+  console.log(`API Check: Room ${roomId} exists: ${exists}`);
+  res.json({ exists, roomId });
+});
+
+app.get('/health', (req, res) => {
+  const roomCount = rooms.size;
+  const totalUsers = Array.from(rooms.values()).reduce((sum, room) => sum + room.users.size, 0);
+  
+  res.json({
+    status: 'ok',
+    rooms: roomCount,
+    activeUsers: totalUsers,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
+
+  // Add this handler for room checking
+  socket.on('check-room', (roomId, callback) => {
+    const exists = rooms.has(roomId);
+    console.log(`Socket Check: Room ${roomId} exists: ${exists}`);
+    callback({ exists });
+  });
 
   socket.on('join-room', (roomId, userId) => {
     console.log(`User ${userId} joining room ${roomId}`);
     
+    // Create room if it doesn't exist (for direct URL access)
     if (!rooms.has(roomId)) {
-      rooms.set(roomId, new Set());
+      console.log(`Room ${roomId} doesn't exist, creating new room`);
+      rooms.set(roomId, {
+        users: new Set(),
+        createdAt: Date.now(),
+        lastActivity: Date.now()
+      });
     }
     
     const room = rooms.get(roomId);
     
     // Get existing users before adding new one
-    const otherUsers = Array.from(room);
+    const otherUsers = Array.from(room.users);
     
     // Add new user to room
-    room.add(userId);
+    room.users.add(userId);
+    room.lastActivity = Date.now();
     socket.join(roomId);
     
-    console.log(`Room ${roomId} has users:`, Array.from(room));
+    console.log(`Room ${roomId} now has users:`, Array.from(room.users));
 
     // Notify new user about existing users
     if (otherUsers.length > 0) {
@@ -69,34 +133,23 @@ io.on('connection', (socket) => {
       console.log(`User ${data.userId} rejoining room ${data.roomId}`);
       
       if (!rooms.has(data.roomId)) {
-        rooms.set(data.roomId, new Set());
+        socket.emit('room-not-found');
+        return;
       }
       
       const rejoinRoom = rooms.get(data.roomId);
-      rejoinRoom.add(data.userId);
+      rejoinRoom.users.add(data.userId);
+      rejoinRoom.lastActivity = Date.now();
       socket.join(data.roomId);
       
-      // Notify other users about reconnection
       socket.to(data.roomId).emit('user-reconnected', data.userId);
       console.log(`User ${data.userId} rejoined room ${data.roomId}`);
-    });
-
-    // Handle user reconnection notification
-    socket.on('user-reconnected', (data) => {
-      console.log(`User ${data.userId} reconnected to room ${data.roomId}`);
-      socket.to(data.roomId).emit('user-reconnected', data.userId);
     });
 
     // Handle user leaving (refresh/close)
     socket.on('user-leaving', (data) => {
       console.log(`User ${data.userId} is leaving room ${data.roomId}`);
       socket.to(data.roomId).emit('user-left', data.userId);
-    });
-
-    // Handle manual reconnection request
-    socket.on('reconnect-request', (data) => {
-      console.log(`Reconnection requested by ${data.userId} in room ${data.roomId}`);
-      socket.to(data.roomId).emit('reconnect-user', data.userId);
     });
 
     // Handle remote audio toggle (mute/unmute)
@@ -108,27 +161,83 @@ io.on('connection', (socket) => {
       });
     });
 
+    // Handle end conversation
+    socket.on('end-conversation', (data) => {
+      console.log(`User ${data.userId} ended conversation in room ${data.roomId}`);
+      
+      io.to(data.roomId).emit('conversation-ended', {
+        endedBy: data.userId,
+        message: 'Conversation ended by partner'
+      });
+      
+      const room = rooms.get(data.roomId);
+      if (room) {
+        room.users.forEach(userId => {
+          io.to(userId).emit('redirect-to-lounge');
+        });
+        rooms.delete(data.roomId);
+        console.log(`Room ${data.roomId} deleted by ${data.userId}`);
+      }
+    });
+
+    // Handle user voluntarily leaving
+    socket.on('leave-room', (data) => {
+      console.log(`User ${data.userId} voluntarily leaving room ${data.roomId}`);
+      
+      const room = rooms.get(data.roomId);
+      if (room) {
+        room.users.delete(data.userId);
+        socket.to(data.roomId).emit('user-left-voluntarily', {
+          userId: data.userId,
+          message: 'Partner left the conversation'
+        });
+        
+        room.lastActivity = Date.now();
+        
+        if (room.users.size === 0) {
+          setTimeout(() => {
+            if (rooms.get(data.roomId) && rooms.get(data.roomId).users.size === 0) {
+              rooms.delete(data.roomId);
+              console.log(`Room ${data.roomId} deleted (empty)`);
+            }
+          }, 30000);
+        }
+      }
+      
+      socket.emit('redirect-to-lounge');
+    });
+
     // WebRTC signaling handlers
     socket.on('offer', (data) => {
       console.log(`Offer from ${data.userId} to room ${roomId}`);
-      socket.to(roomId).emit('offer', data);
+      socket.to(roomId).emit('offer', {
+        offer: data.offer,
+        userId: data.userId
+      });
     });
 
     socket.on('answer', (data) => {
       console.log(`Answer from ${data.userId} to room ${roomId}`);
-      socket.to(roomId).emit('answer', data);
+      socket.to(roomId).emit('answer', {
+        answer: data.answer,
+        userId: data.userId
+      });
     });
 
     socket.on('ice-candidate', (data) => {
-      socket.to(roomId).emit('ice-candidate', data);
+      console.log(`ICE candidate from ${data.userId} to room ${roomId}`);
+      socket.to(roomId).emit('ice-candidate', {
+        candidate: data.candidate,
+        userId: data.userId
+      });
     });
 
     socket.on('chat-message', (data) => {
       console.log(`Chat message from ${data.userId} in room ${roomId}: ${data.message}`);
       io.to(roomId).emit('chat-message', {
-        userId: data.userId || userId,
+        userId: data.userId,
         message: data.message,
-        messageId: data.messageId, // Include message ID to prevent duplicates
+        messageId: data.messageId,
         timestamp: data.timestamp || new Date().toLocaleTimeString()
       });
     });
@@ -138,38 +247,35 @@ io.on('connection', (socket) => {
       
       const room = rooms.get(roomId);
       if (room) {
-        room.delete(userId);
+        room.users.delete(userId);
+        room.lastActivity = Date.now();
         socket.to(roomId).emit('user-disconnected', userId);
         
-        // Clean up empty rooms
-        if (room.size === 0) {
-          // Wait a bit before deleting room to allow reconnections
+        if (room.users.size === 0) {
           setTimeout(() => {
-            if (rooms.get(roomId) && rooms.get(roomId).size === 0) {
+            if (rooms.get(roomId) && rooms.get(roomId).users.size === 0) {
               rooms.delete(roomId);
               console.log(`Room ${roomId} deleted (empty)`);
             }
-          }, 30000); // Wait 30 seconds before deleting room
-        } else {
-          console.log(`Room ${roomId} still has ${room.size} users:`, Array.from(room));
+          }, 30000);
         }
       }
     });
   });
 
-  // Handle direct socket disconnection (without room context)
+  // Handle direct socket disconnection
   socket.on('disconnect', (reason) => {
     console.log(`Socket ${socket.id} disconnected:`, reason);
     
-    // Find and remove user from all rooms
-    rooms.forEach((users, roomId) => {
-      if (users.has(socket.id)) {
-        users.delete(socket.id);
+    rooms.forEach((roomData, roomId) => {
+      if (roomData.users.has(socket.id)) {
+        roomData.users.delete(socket.id);
+        roomData.lastActivity = Date.now();
         socket.to(roomId).emit('user-disconnected', socket.id);
         
-        if (users.size === 0) {
+        if (roomData.users.size === 0) {
           setTimeout(() => {
-            if (rooms.get(roomId) && rooms.get(roomId).size === 0) {
+            if (rooms.get(roomId) && rooms.get(roomId).users.size === 0) {
               rooms.delete(roomId);
               console.log(`Room ${roomId} cleaned up after disconnect`);
             }
@@ -178,88 +284,40 @@ io.on('connection', (socket) => {
       }
     });
   });
-
-  // Handle connection errors
-  socket.on('connect_error', (error) => {
-    console.log('Socket connection error:', error);
-  });
-
-  // Handle reconnection attempts
-  socket.on('reconnect', (attemptNumber) => {
-    console.log('Socket reconnected, attempt:', attemptNumber);
-  });
-
-  socket.on('reconnect_attempt', (attemptNumber) => {
-    console.log('Socket reconnection attempt:', attemptNumber);
-  });
-
-  socket.on('reconnect_error', (error) => {
-    console.log('Socket reconnection error:', error);
-  });
-
-  socket.on('reconnect_failed', () => {
-    console.log('Socket reconnection failed');
-  });
 });
 
-// Room cleanup interval (remove empty rooms periodically)
+// Room cleanup interval
 setInterval(() => {
   const now = Date.now();
+  const ONE_HOUR = 60 * 60 * 1000;
   let roomsCleaned = 0;
   
-  rooms.forEach((users, roomId) => {
-    if (users.size === 0) {
+  rooms.forEach((roomData, roomId) => {
+    if (roomData.users.size === 0 && (now - roomData.lastActivity) > ONE_HOUR) {
       rooms.delete(roomId);
       roomsCleaned++;
-      console.log(`Cleaned up empty room: ${roomId}`);
+      console.log(`Cleaned up inactive room: ${roomId}`);
     }
   });
   
   if (roomsCleaned > 0) {
-    console.log(`Cleaned up ${roomsCleaned} empty rooms`);
+    console.log(`Cleaned up ${roomsCleaned} inactive rooms`);
   }
-}, 60000); // Check every minute
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  const roomCount = rooms.size;
-  const totalUsers = Array.from(rooms.values()).reduce((sum, users) => sum + users.size, 0);
-  
-  res.json({
-    status: 'ok',
-    rooms: roomCount,
-    totalUsers: totalUsers,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Room info endpoint (for debugging)
-app.get('/api/rooms', (req, res) => {
-  const roomInfo = {};
-  rooms.forEach((users, roomId) => {
-    roomInfo[roomId] = Array.from(users);
-  });
-  
-  res.json({
-    totalRooms: rooms.size,
-    rooms: roomInfo
-  });
-});
+}, 60000);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Access via: http://localhost:${PORT}`);
+  console.log(`Lounge: http://localhost:${PORT}/lounge`);
   console.log(`Health check: http://localhost:${PORT}/health`);
-  console.log(`Room info: http://localhost:${PORT}/api/rooms`);
+  console.log(`Active rooms: ${rooms.size}`);
 });
 
-// Graceful shutdown
 process.on('SIGINT', () => {
   console.log('Shutting down server gracefully...');
   console.log(`Active rooms before shutdown: ${rooms.size}`);
   
-  // Notify all clients about server shutdown
   io.emit('server-shutdown');
   
   setTimeout(() => {
@@ -268,12 +326,4 @@ process.on('SIGINT', () => {
       process.exit(0);
     });
   }, 1000);
-});
-
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM, shutting down gracefully...');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
-  });
 });

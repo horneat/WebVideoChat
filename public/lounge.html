@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebChat - Lounge</title>
+    <link rel="stylesheet" href="style.css">
+    <base href="/">
+    <style>
+        .lounge-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+            background: #2d2d2d;
+            border-radius: 12px;
+            margin-top: 50px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+        }
+        
+        .lounge-header {
+            margin-bottom: 30px;
+        }
+        
+        .lounge-header h1 {
+            color: #007bff;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .lounge-header p {
+            color: #ccc;
+            font-size: 1.1em;
+        }
+        
+        .room-actions {
+            margin: 30px 0;
+        }
+        
+        .btn {
+            padding: 15px 30px;
+            margin: 10px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            background: #007bff;
+            color: white;
+        }
+        
+        .btn:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,123,255,0.3);
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+        }
+        
+        .btn-secondary:hover {
+            background: #545b62;
+        }
+        
+        .room-input {
+            padding: 12px 16px;
+            margin: 10px;
+            border: 2px solid #444;
+            border-radius: 8px;
+            font-size: 16px;
+            width: 250px;
+            background: #1a1a1a;
+            color: white;
+        }
+        
+        .room-input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+        
+        .error-message {
+            color: #dc3545;
+            margin: 15px 0;
+            padding: 12px;
+            background-color: rgba(220,53,69,0.1);
+            border-radius: 8px;
+            border-left: 4px solid #dc3545;
+            display: none;
+        }
+        
+        .success-message {
+            color: #28a745;
+            margin: 15px 0;
+            padding: 12px;
+            background-color: rgba(40,167,69,0.1);
+            border-radius: 8px;
+            border-left: 4px solid #28a745;
+            display: none;
+        }
+
+        .language-selector {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .language-selector select {
+            background: #2d2d2d;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 5px;
+            padding: 8px 12px;
+            font-size: 14px;
+        }
+
+        .active-rooms {
+            margin: 30px 0;
+            text-align: left;
+        }
+
+        .active-rooms h3 {
+            color: #007bff;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        .room-list {
+            display: grid;
+            gap: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .room-item {
+            background: #3d3d3d;
+            padding: 15px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-left: 4px solid #007bff;
+        }
+
+        .room-item:hover {
+            background: #4d4d4d;
+            transform: translateX(5px);
+        }
+
+        .room-id {
+            font-weight: bold;
+            color: #007bff;
+            margin-bottom: 5px;
+        }
+
+        .room-stats {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .no-rooms {
+            text-align: center;
+            color: #888;
+            padding: 20px;
+            font-style: italic;
+        }
+
+        .stats-panel {
+            background: #3d3d3d;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+
+        .stats-panel h3 {
+            color: #007bff;
+            margin-bottom: 15px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #007bff;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: #ccc;
+        }
+    </style>
+</head>
+<body>
+    <div class="language-selector">
+        <select id="languageSelect">
+            <option value="en">English</option>
+            <option value="ru">Русский</option>
+            <option value="tr">Türkçe</option>
+            <option value="es">Español</option>
+            <option value="fr">Français</option>
+        </select>
+    </div>
+
+    <div class="lounge-container">
+        <div class="lounge-header">
+            <h1 data-i18n="loungeTitle">WebChat Lounge</h1>
+            <p data-i18n="loungeSubtitle">Connect with friends and family through secure video calls</p>
+        </div>
+
+        <div id="errorMessage" class="error-message"></div>
+        <div id="successMessage" class="success-message"></div>
+
+        <!-- Stats Panel -->
+        <div class="stats-panel">
+            <h3>Server Statistics</h3>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-number" id="roomCount">0</div>
+                    <div class="stat-label" data-i18n="activeRooms">Active Rooms</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" id="userCount">0</div>
+                    <div class="stat-label" data-i18n="activeUsers">Active Users</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Rooms List -->
+        <div class="active-rooms">
+            <h3 data-i18n="availableRooms">Available Rooms</h3>
+            <div id="roomList" class="room-list">
+                <div class="no-rooms" data-i18n="noRoomsAvailable">No active rooms available. Create one!</div>
+            </div>
+        </div>
+
+        <!-- Room Actions -->
+        <div class="room-actions">
+            <button id="createRoomBtn" class="btn" data-i18n="createNewRoom">
+                Create New Room
+            </button>
+            <button id="rejoinRoomBtn" class="btn btn-secondary" data-i18n="rejoinRoom">
+                Rejoin Room
+            </button>
+        </div>
+
+        <!-- Join Room Section -->
+        <div id="rejoinSection" style="display: none;">
+            <input type="text" id="roomIdInput" class="room-input" placeholder="Enter Room ID" data-i18n-placeholder="enterRoomId">
+            <button id="joinRoomBtn" class="btn" data-i18n="joinRoom">Join Room</button>
+        </div>
+
+        <!-- Instructions -->
+        <div style="margin-top: 30px; padding: 20px; background: #3d3d3d; border-radius: 8px;">
+            <h3 style="color: #007bff; margin-bottom: 15px;" data-i18n="howToUse">How to use:</h3>
+            <ol style="text-align: left; color: #ccc; line-height: 1.6;">
+                <li data-i18n="instruction1">Click "Create New Room" to start a video call</li>
+                <li data-i18n="instruction2">Share the room link with your friends</li>
+                <li data-i18n="instruction3">Allow camera and microphone access when prompted</li>
+                <li data-i18n="instruction4">Start your video conversation!</li>
+            </ol>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="languages.js"></script>
+    <script src="lounge.js"></script>
+</body>
+</html>
