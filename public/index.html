@@ -30,7 +30,7 @@
                         <div class="video-label" id="remoteLabel">Waiting for partner...</div>
                         <div class="quality-indicator quality-high" id="qualityIndicator">HD</div>
                     </div>
-                    
+
                     <!-- Preview Video - Local User (Small) -->
                     <div class="video-wrapper preview-video">
                         <video id="localVideo" autoplay muted playsinline></video>
@@ -51,7 +51,7 @@
             <div class="controls-section">
                 <!-- Connection Status -->
                 <div id="connectionStatus" class="status" style="display: none;">Connecting...</div>
-                
+
                 <!-- Main Controls -->
                 <div class="controls-panel">
                     <h3>Controls</h3>
@@ -61,6 +61,7 @@
                         <button id="videoBtn" class="control-btn">📹 Stop Video</button>
                         <button id="qualityBtn" class="control-btn">⚡ Quality: Balanced</button>
                         <button id="shareBtn" class="control-btn">🔗 Copy Link</button>
+                  			<!--<button id="statsToggleBtn" class="control-btn">📊 Show Stats</button>-->
                         <button id="leaveBtn" class="control-btn" style="background: #6c757d;">🚪 Leave</button>
                         <button id="endCallBtn" class="control-btn" style="background: #dc3545;">📞 End Call</button>
                     </div>
@@ -68,15 +69,26 @@
 
                 <!-- Statistics Panel -->
                 <div class="stats-panel">
-                    <h3>Statistics</h3>
-                    <div class="stats-content">
-                        <div class="stat">Bitrate: <span id="bitrateStat">-</span></div>
-                        <div class="stat">Resolution: <span id="resolutionStat">-</span></div>
-                        <div class="stat">FPS: <span id="fpsStat">-</span></div>
-                        <div class="stat">Packets: <span id="packetsStat">-</span></div>
+                    <h3 id="statsHeader" style="cursor: pointer; user-select: none;">Statistics ▼</h3>
+                    <div id="statsContent" class="stats-content" style="display: none;">
+                        <div class="stat">
+                            <span class="stat-label">Bitrate:</span>
+                            <span class="stat-value" id="bitrateStat">0 kbps</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Resolution:</span>
+                            <span class="stat-value" id="resolutionStat">0x0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">FPS:</span>
+                            <span class="stat-value" id="fpsStat">0</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Packets:</span>
+                            <span class="stat-value" id="packetsStat">0</span>
+                        </div>
                     </div>
                 </div>
-
                 <!-- Chat Section -->
                 <div class="chat-panel">
                     <h3>Chat</h3>
