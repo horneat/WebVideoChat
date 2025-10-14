@@ -814,6 +814,438 @@ class VideoChat {
         }, 2000); // Update every 2 seconds
     }
 
+    // Language detection method - IMPROVED VERSION
+    detectMessageLanguage(message) {
+        // Early return for very short messages
+        if (message.length < 2) return 'en';
+
+        // Clean the message for better detection
+        const cleanMessage = message.replace(/[.,!?;:'"()\[\]{}]/g, '').toLowerCase().trim();
+
+        // Language-specific word patterns (expanded list)
+        const languagePatterns = {
+            'ru': [
+                /\b(привет|здравствуй|спасибо|пожалуйста|да|нет|как|что|где|когда|почему|хорошо|плохо|давай|пока)\b/,
+                /[а-яё]/
+            ],
+            'tr': [
+                /\b(merhaba|teşekkür|evet|hayır|lütfen|nasıl|ne|nerede|ne zaman|niçin|iyi|kötü|hadi|güle)\b/,
+                /[çğıöşü]/
+            ],
+            'es': [
+                /\b(hola|gracias|por favor|sí|no|cómo|qué|dónde|cuándo|por qué|bueno|malo|vamos|adiós)\b/,
+                /[ñáéíóúü]/
+            ],
+            'fr': [
+                /\b(bonjour|merci|s'il vous plaît|oui|non|comment|que|où|quand|pourquoi|bon|mauvais|allons|au revoir)\b/,
+                /[àâäçéèêëîïôöùûüÿ]/
+            ]
+        };
+
+        // Check for specific language patterns
+        for (const [lang, patterns] of Object.entries(languagePatterns)) {
+            for (const pattern of patterns) {
+                if (pattern.test(cleanMessage)) {
+                    console.log(`Detected ${lang} language in message: "${message.substring(0, 30)}..."`);
+                    return lang;
+                }
+            }
+        }
+
+        // If no specific patterns found, check character ranges
+        const hasCyrillic = /[\u0400-\u04FF]/.test(message); // Russian, etc.
+        const hasTurkishChars = /[çğıöşüÇĞİÖŞÜ]/.test(message);
+        const hasSpanishChars = /[ñáéíóúüÑÁÉÍÓÚÜ]/.test(message);
+        const hasFrenchChars = /[àâäçéèêëîïôöùûüÿÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸ]/.test(message);
+
+        if (hasCyrillic) return 'ru';
+        if (hasTurkishChars) return 'tr';
+        if (hasSpanishChars) return 'es';
+        if (hasFrenchChars) return 'fr';
+
+        // Default to English for Latin script without specific patterns
+        return 'en';
+    }
+
+    // Enhanced displayMessage method - FIXED VERSION with dual translation buttons
+    displayMessage(user, message, timestamp, messageId = null, isSystem = false) {
+      if (isSystem) {
+          this.displaySystemMessage(message);
+          return;
+      }
+
+      // Generate ID if not provided
+      const id = messageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      // Check if message with this ID already exists
+      const existingMessage = document.querySelector(`[data-message-id="${id}"]`);
+      if (existingMessage) {
+          return;
+      }
+
+      // Detect message language
+      const messageLang = this.detectMessageLanguage(message);
+      const currentLang = window.languageManager.currentLanguage;
+      const isOwnMessage = user === window.languageManager.translate('you');
+
+      console.log(`Message language: ${messageLang}, Current UI language: ${currentLang}, User: ${user}, Is own: ${isOwnMessage}`);
+
+      // Show translate buttons if:
+      // 1. Message is from another user (not yourself)
+      // 2. AND message is not in current UI language
+      // 3. OR message contains non-Latin characters (for broader detection)
+      const needsTranslation = !isOwnMessage &&
+                             (messageLang !== currentLang || this.hasNonLatinCharacters(message));
+
+      console.log(`Needs translation: ${needsTranslation}, Has non-Latin: ${this.hasNonLatinCharacters(message)}`);
+
+      const messageElement = document.createElement('div');
+      messageElement.className = 'chat-message';
+      messageElement.setAttribute('data-message-id', id);
+      messageElement.setAttribute('data-original-lang', messageLang);
+      messageElement.setAttribute('data-translated', 'false');
+
+      // Build message HTML with dual translation buttons
+      let messageHTML = `
+          <div class="message-header">
+              <span class="user">${user}:</span>
+      `;
+
+      if (needsTranslation) {
+          messageHTML += `
+              <div class="translate-buttons">
+                  <button class="translate-btn google-translate" onclick="window.currentVideoChat.translateMessage('${id}', 'google', this)" title="Translate with Google">
+                      <span class="translate-icon">🌐</span>
+                  </button>
+                  <button class="translate-btn deepseek-translate" onclick="window.currentVideoChat.translateMessage('${id}', 'deepseek', this)" title="Translate with DeepSeek">
+                      <span class="translate-icon">🤖</span>
+                  </button>
+              </div>
+          `;
+          console.log(`Added dual translate buttons for message: "${message.substring(0, 30)}..."`);
+      }
+
+      messageHTML += `
+          </div>
+          <div class="original-message">${this.escapeHtml(message)}</div>
+          <div class="translated-message" id="translated-${id}" style="display: none;"></div>
+          <div class="translation-service" id="service-${id}" style="display: none; font-size: 10px; color: #888; margin-top: 2px;"></div>
+          <span class="time">${timestamp}</span>
+      `;
+
+      messageElement.innerHTML = messageHTML;
+      this.chatMessages.appendChild(messageElement);
+      this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+  }
+
+  // Helper method to detect non-Latin characters
+  hasNonLatinCharacters(text) {
+      // Detect any non-Latin characters (Cyrillic, Arabic, Chinese, Japanese, Korean, etc.)
+      const nonLatinPattern = /[^\u0000-\u007F\u00A0-\u00FF\u0100-\u017F\u0180-\u024F]/;
+      return nonLatinPattern.test(text);
+  }
+
+  // Enhanced language detection method
+  detectMessageLanguage(message) {
+      // Early return for very short messages
+      if (message.length < 2) return 'en';
+
+      // Clean the message for better detection
+      const cleanMessage = message.replace(/[.,!?;:'"()\[\]{}]/g, '').toLowerCase().trim();
+
+      // Language-specific word patterns (expanded list)
+      const languagePatterns = {
+          'ru': [
+              /\b(привет|здравствуй|спасибо|пожалуйста|да|нет|как|что|где|когда|почему|хорошо|плохо|давай|пока|здравствуйте|до свидания|извините)\b/,
+              /[а-яё]/
+          ],
+          'tr': [
+              /\b(merhaba|teşekkür|evet|hayır|lütfen|nasıl|ne|nerede|ne zaman|niçin|iyi|kötü|hadi|güle|selam|hoşça kal|özür dilerim)\b/,
+              /[çğıöşü]/
+          ],
+          'es': [
+              /\b(hola|gracias|por favor|sí|no|cómo|qué|dónde|cuándo|por qué|bueno|malo|vamos|adiós|hasta luego|perdón|lo siento)\b/,
+              /[ñáéíóúü]/
+          ],
+          'fr': [
+              /\b(bonjour|merci|s'il vous plaît|oui|non|comment|que|où|quand|pourquoi|bon|mauvais|allons|au revoir|salut|à bientôt|désolé)\b/,
+              /[àâäçéèêëîïôöùûüÿ]/
+          ]
+      };
+
+      // Check for specific language patterns
+      for (const [lang, patterns] of Object.entries(languagePatterns)) {
+          for (const pattern of patterns) {
+              if (pattern.test(cleanMessage)) {
+                  console.log(`Detected ${lang} language in message: "${message.substring(0, 30)}..."`);
+                  return lang;
+              }
+          }
+      }
+
+      // If no specific patterns found, check character ranges
+      const hasCyrillic = /[\u0400-\u04FF]/.test(message); // Russian, etc.
+      const hasTurkishChars = /[çğıöşüÇĞİÖŞÜ]/.test(message);
+      const hasSpanishChars = /[ñáéíóúüÑÁÉÍÓÚÜ]/.test(message);
+      const hasFrenchChars = /[àâäçéèêëîïôöùûüÿÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸ]/.test(message);
+
+      if (hasCyrillic) return 'ru';
+      if (hasTurkishChars) return 'tr';
+      if (hasSpanishChars) return 'es';
+      if (hasFrenchChars) return 'fr';
+
+      // Default to English for Latin script without specific patterns
+      return 'en';
+  }
+
+  // Fixed Translation Method - Only disable the used service button
+  async translateMessage(messageId, service, buttonElement) {
+      const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+      if (!messageElement) return;
+
+      const originalText = messageElement.querySelector('.original-message').textContent;
+      const targetLang = window.languageManager.currentLanguage;
+
+      // Disable only the clicked button during translation
+      buttonElement.disabled = true;
+      buttonElement.classList.add('translating');
+      buttonElement.innerHTML = '<span class="translate-icon">🔄</span>';
+      buttonElement.title = 'Translating...';
+
+      try {
+          const response = await fetch('/api/translate', {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                  text: originalText,
+                  targetLang: targetLang,
+                  messageId: messageId,
+                  service: service
+              })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+              throw new Error(data.error || 'Translation failed');
+          }
+
+          // Show translation
+          const translatedElement = document.getElementById(`translated-${messageId}`);
+          const serviceElement = document.getElementById(`service-${messageId}`);
+
+          translatedElement.textContent = data.translatedText;
+          translatedElement.style.display = 'block';
+
+          // Show which service was used
+          serviceElement.textContent = `Translated with ${data.service}`;
+          serviceElement.style.display = 'block';
+
+          // ONLY disable the used button, keep the other one active
+          buttonElement.disabled = true;
+          buttonElement.classList.remove('translating');
+          buttonElement.classList.add('translated');
+          buttonElement.innerHTML = '<span class="translate-icon">✅</span>';
+          buttonElement.title = `Translated with ${data.service}`;
+          buttonElement.style.opacity = '0.6';
+
+          // Mark which service was used
+          messageElement.setAttribute('data-translated-service', service);
+          messageElement.setAttribute('data-translated', 'true');
+
+          // Keep the other button active if it exists
+          const otherButton = messageElement.querySelector(`.translate-btn:not(.${service}-translate)`);
+          if (otherButton && !otherButton.classList.contains('translated')) {
+              otherButton.disabled = false;
+              otherButton.style.opacity = '1';
+          }
+
+          // Add subtle animation to translated text
+          translatedElement.style.animation = 'fadeInUp 0.5s ease-out';
+
+          // Show success message
+          this.displaySystemMessage(`Message translated with ${data.service}`);
+
+      } catch (error) {
+          console.error('Translation error:', error);
+
+          // Re-enable the button on error
+          buttonElement.disabled = false;
+          buttonElement.classList.remove('translating');
+          buttonElement.innerHTML = '<span class="translate-icon">❌</span>';
+          buttonElement.title = 'Translation failed - Click to retry';
+          buttonElement.classList.add('error');
+
+          // Reset button after 3 seconds
+          setTimeout(() => {
+              if (messageElement.parentNode) {
+                  buttonElement.disabled = false;
+                  buttonElement.classList.remove('error');
+
+                  // Reset button icon based on service
+                  if (buttonElement.classList.contains('google-translate')) {
+                      buttonElement.innerHTML = '<span class="translate-icon">🌐</span>';
+                      buttonElement.title = 'Translate with Google';
+                  } else {
+                      buttonElement.innerHTML = '<span class="translate-icon">🤖</span>';
+                      buttonElement.title = 'Translate with DeepSeek';
+                  }
+              }
+          }, 3000);
+
+          this.displaySystemMessage(`${service} translation failed. Please try again.`);
+      }
+  }
+
+    // HTML escape function for safety
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Translation method with service selection
+    async translateMessage(messageId, service, buttonElement) {
+        const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageElement) return;
+
+        const originalText = messageElement.querySelector('.original-message').textContent;
+        const targetLang = window.languageManager.currentLanguage;
+
+        // Disable all translate buttons for this message during translation
+        const translateButtons = messageElement.querySelectorAll('.translate-btn');
+        translateButtons.forEach(btn => {
+            btn.disabled = true;
+            btn.classList.add('translating');
+        });
+
+        // Update clicked button to show loading state
+        buttonElement.innerHTML = '<span class="translate-icon">🔄</span>';
+        buttonElement.title = 'Translating...';
+
+        try {
+            const response = await fetch('/api/translate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    text: originalText,
+                    targetLang: targetLang,
+                    messageId: messageId,
+                    service: service
+                })
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.error || 'Translation failed');
+            }
+
+            // Show translation
+            const translatedElement = document.getElementById(`translated-${messageId}`);
+            const serviceElement = document.getElementById(`service-${messageId}`);
+
+            translatedElement.textContent = data.translatedText;
+            translatedElement.style.display = 'block';
+
+            // Show which service was used
+            serviceElement.textContent = `Translated with ${data.service}`;
+            serviceElement.style.display = 'block';
+
+            // KEEP BUTTONS VISIBLE but disable them and show success state
+            translateButtons.forEach(btn => {
+                btn.disabled = true;
+                btn.classList.remove('translating');
+                btn.classList.add('translated');
+
+                // Show checkmark on the clicked button
+                if (btn === buttonElement) {
+                    btn.innerHTML = '<span class="translate-icon">✅</span>';
+                    btn.title = 'Translated';
+                    btn.style.opacity = '0.7';
+                } else {
+                    // Show disabled state for other buttons
+                    btn.style.opacity = '0.5';
+                    btn.title = 'Already translated';
+                }
+            });
+
+            // Add subtle animation to translated text
+            translatedElement.style.animation = 'fadeInUp 0.5s ease-out';
+
+            // Show success message
+            this.displaySystemMessage(`Message translated with ${data.service}`);
+
+        } catch (error) {
+            console.error('Translation error:', error);
+
+            // Re-enable buttons on error
+            translateButtons.forEach(btn => {
+                btn.disabled = false;
+                btn.classList.remove('translating');
+            });
+
+            // Show error state on the clicked button
+            buttonElement.innerHTML = '<span class="translate-icon">❌</span>';
+            buttonElement.title = 'Translation failed - Click to retry';
+            buttonElement.classList.add('error');
+
+            // Reset button after 3 seconds
+            setTimeout(() => {
+                if (messageElement.parentNode) {
+                    buttonElement.disabled = false;
+                    buttonElement.classList.remove('error');
+
+                    // Reset button icons based on service
+                    if (buttonElement.classList.contains('google-translate')) {
+                        buttonElement.innerHTML = '<span class="translate-icon">🌐</span>';
+                        buttonElement.title = 'Translate with Google';
+                    } else {
+                        buttonElement.innerHTML = '<span class="translate-icon">🤖</span>';
+                        buttonElement.title = 'Translate with DeepSeek';
+                    }
+                }
+            }, 3000);
+
+            this.displaySystemMessage(`${service} translation failed. Please try again.`);
+        }
+    }
+    // Debug method to check button visibility 
+    debugButtonVisibility() {
+        const messages = document.querySelectorAll('.chat-message');
+        console.log(`=== BUTTON VISIBILITY DEBUG ===`);
+        console.log(`Total messages: ${messages.length}`);
+
+        messages.forEach((message, index) => {
+            const buttons = message.querySelector('.translate-buttons');
+            const buttonElements = message.querySelectorAll('.translate-btn');
+            const isOwn = message.querySelector('.user').textContent.includes('You');
+            const isTranslated = message.getAttribute('data-translated') === 'true';
+
+            console.log(`Message ${index + 1}:`);
+            console.log(`  - Buttons container exists: ${!!buttons}`);
+            console.log(`  - Button elements found: ${buttonElements.length}`);
+            console.log(`  - Is own message: ${isOwn}`);
+            console.log(`  - Is translated: ${isTranslated}`);
+            console.log(`  - Computed display: ${buttons ? window.getComputedStyle(buttons).display : 'N/A'}`);
+            console.log(`  - Computed visibility: ${buttons ? window.getComputedStyle(buttons).visibility : 'N/A'}`);
+            console.log(`  - Opacity: ${buttons ? window.getComputedStyle(buttons).opacity : 'N/A'}`);
+
+            // Log individual button states
+            buttonElements.forEach((btn, btnIndex) => {
+                console.log(`  - Button ${btnIndex + 1}:`);
+                console.log(`    * Class: ${btn.className}`);
+                console.log(`    * Disabled: ${btn.disabled}`);
+                console.log(`    * Computed display: ${window.getComputedStyle(btn).display}`);
+                console.log(`    * Computed visibility: ${window.getComputedStyle(btn).visibility}`);
+            });
+        });
+        console.log(`=== END DEBUG ===`);
+    }
     // Room control functions
     leaveRoom() {
         if (confirm('Are you sure you want to leave the room?')) {
@@ -973,13 +1405,13 @@ class VideoChat {
     sendMessage() {
         const message = this.chatInput.value.trim();
         if (message) {
-            // Generate unique message ID
             const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-            // Clear input immediately
             this.chatInput.value = '';
 
-            // Display the message locally immediately with ID
+            // Detect language for own message (for future features)
+            const messageLang = this.detectMessageLanguage(message);
+
+            // Display the message locally
             this.displayMessage(
                 window.languageManager.translate('you'),
                 message,
@@ -987,37 +1419,16 @@ class VideoChat {
                 messageId
             );
 
-            // Send to other users with ID
+            // Send to other users
             this.socket.emit('chat-message', {
                 message: message,
                 roomId: this.roomId,
                 userId: this.userId,
                 messageId: messageId,
-                timestamp: new Date().toLocaleTimeString()
+                timestamp: new Date().toLocaleTimeString(),
+                detectedLang: messageLang // Optional: send detected language for optimization
             });
         }
-    }
-
-    displayMessage(user, message, timestamp, messageId = null) {
-        // Generate ID if not provided
-        const id = messageId || `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-        // Check if message with this ID already exists (prevent duplicates)
-        const existingMessage = document.querySelector(`[data-message-id="${id}"]`);
-        if (existingMessage) {
-            return; // Message already displayed
-        }
-
-        const messageElement = document.createElement('div');
-        messageElement.className = 'chat-message';
-        messageElement.setAttribute('data-message-id', id);
-        messageElement.innerHTML = `
-            <span class="user">${user}:</span>
-            <span class="message">${message}</span>
-            <span class="time">${timestamp}</span>
-        `;
-        this.chatMessages.appendChild(messageElement);
-        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
     }
 
     // System messages (separate from chat)

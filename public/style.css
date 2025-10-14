@@ -194,9 +194,9 @@ body {
     gap: 15px;
     min-width: 300px;
     max-width: 400px;
-    overflow-y: auto; /* Add scrolling */
-    max-height: calc(100vh - 40px); /* Limit height */
-    padding-right: 5px; /* Space for scrollbar */
+    overflow-y: auto;
+    max-height: calc(100vh - 40px);
+    padding-right: 5px;
 }
 
 /* Custom scrollbar for controls section */
@@ -309,8 +309,9 @@ body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    flex-shrink: 0; /* Prevent shrinking */
+    flex-shrink: 0;
 }
+
 /* Fix for mobile layout */
 @media (max-width: 768px) {
     .main-layout {
@@ -350,7 +351,6 @@ body {
         right: 10px;
     }
 
-    /* Ensure chat is visible on mobile */
     .chat-container {
         height: 250px;
     }
@@ -372,14 +372,14 @@ body {
     background: #2d2d2d;
     border-radius: 12px;
     padding: 20px;
-    flex-shrink: 0; /* Prevent shrinking */
+    flex-shrink: 0;
 }
 
 .chat-panel {
     flex: 1;
     display: flex;
     flex-direction: column;
-    min-height: 400px; /* Ensure minimum height */
+    min-height: 400px;
 }
 
 .chat-messages {
@@ -395,6 +395,7 @@ body {
     background: #3d3d3d;
     border-radius: 8px;
     border-left: 3px solid #007bff;
+    transition: all 0.3s ease;
 }
 
 .chat-message .user {
@@ -606,5 +607,344 @@ body {
     .stat {
         font-size: 12px;
         padding: 8px;
+    }
+}
+
+/* ===== CRITICAL TRANSLATION BUTTON FIXES ===== */
+
+/* Force translate buttons to always be visible */
+.translate-buttons {
+    display: flex !important;
+    gap: 5px;
+    margin-left: auto;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* Force button visibility on all browsers and devices */
+.translate-btn {
+    background: none;
+    border: 1px solid #444;
+    border-radius: 12px;
+    padding: 4px 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 12px;
+    width: 28px;
+    height: 24px;
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: relative;
+}
+
+/* Google Translate Button */
+.translate-btn.google-translate {
+    background: linear-gradient(135deg, #4285f4 0%, #34a853 100%);
+    border-color: #4285f4;
+}
+
+/* DeepSeek Translate Button */
+.translate-btn.deepseek-translate {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-color: #667eea;
+}
+
+/* Active state for clickable buttons */
+.translate-btn:not(:disabled):not(.translated) {
+    opacity: 1 !important;
+    cursor: pointer;
+}
+
+.translate-btn:not(:disabled):not(.translated):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Disabled but visible state */
+.translate-btn:disabled {
+    opacity: 0.6 !important;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Translated state - used service */
+.translate-btn.translated {
+    opacity: 0.6 !important;
+    cursor: default;
+}
+
+/* Loading state */
+.translate-btn.translating {
+    background: linear-gradient(135deg, #ffd700 0%, #ffa500 100%);
+    animation: pulse 1.5s infinite;
+}
+
+/* Error state */
+.translate-btn.error {
+    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
+}
+
+/* Translate icon */
+.translate-icon {
+    font-size: 12px;
+    display: block;
+}
+
+/* Service indicator */
+.translation-service {
+    font-size: 10px;
+    color: #888;
+    margin-top: 2px;
+    font-style: italic;
+}
+
+/* Original message text */
+.original-message {
+    margin-bottom: 4px;
+    line-height: 1.4;
+    word-wrap: break-word;
+}
+
+/* Translated message styling */
+.translated-message {
+    font-style: italic;
+    color: #2d5016;
+    border-left: 3px solid #4CAF50;
+    padding-left: 12px;
+    margin: 8px 0 4px 0;
+    background: linear-gradient(135deg, #a8e6cf 0%, #dcedc1 100%);
+    padding: 8px 12px;
+    border-radius: 8px;
+    line-height: 1.4;
+    word-wrap: break-word;
+    box-shadow: 0 2px 4px rgba(76, 175, 80, 0.2);
+}
+
+/* Animation for translated text */
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.translated-message {
+    animation: fadeInUp 0.5s ease-out;
+}
+
+/* Pulse animation for loading */
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+/* Success animation for translated button */
+@keyframes translateSuccess {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+.translate-btn.translated {
+    animation: translateSuccess 0.5s ease;
+}
+
+/* ===== BROWSER-SPECIFIC FIXES ===== */
+
+/* Chrome/Mac specific fixes */
+@media screen and (-webkit-min-device-pixel-ratio:0) {
+    .translate-buttons {
+        display: flex !important;
+        visibility: visible !important;
+    }
+
+    .translate-btn {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        -webkit-appearance: none;
+    }
+}
+
+/* Safari specific fixes */
+@supports (-webkit-touch-callout: none) {
+    .translate-buttons {
+        display: flex !important;
+    }
+}
+
+/* Firefox specific fixes */
+@-moz-document url-prefix() {
+    .translate-buttons {
+        display: flex !important;
+    }
+}
+
+/* ===== MESSAGE HEADER FIXES ===== */
+
+/* Ensure message header properly displays buttons */
+.message-header {
+    display: flex !important;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    gap: 8px;
+    min-height: 24px;
+}
+
+/* Ensure user text doesn't push buttons out of view */
+.message-header .user {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: 8px;
+}
+
+/* Enhanced message header for translated messages */
+.chat-message.has-translation .message-header {
+    border-bottom: 1px solid rgba(76, 175, 80, 0.3);
+    padding-bottom: 4px;
+    margin-bottom: 6px;
+}
+
+/* Success state for translated messages */
+.chat-message[data-translated="true"] {
+    border-left-color: #4CAF50;
+    background: linear-gradient(135deg, #3d3d3d 0%, rgba(76, 175, 80, 0.1) 100%);
+}
+
+/* Force visibility on translated messages */
+.chat-message[data-translated="true"] .translate-buttons {
+    display: flex !important;
+    visibility: visible !important;
+}
+
+/* ===== MOBILE RESPONSIVENESS ===== */
+
+/* Mobile-specific button sizing */
+@media (max-width: 768px) {
+    .translate-buttons {
+        gap: 3px;
+    }
+
+    .translate-btn {
+        width: 26px;
+        height: 22px;
+        padding: 2px 6px;
+    }
+
+    .translate-icon {
+        font-size: 11px;
+    }
+
+    .message-header {
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+}
+
+/* Small mobile devices */
+@media (max-width: 480px) {
+    .translate-btn {
+        width: 24px;
+        height: 20px;
+        padding: 1px 4px;
+    }
+
+    .translate-icon {
+        font-size: 10px;
+    }
+}
+
+/* ===== TOOLTIP ENHANCEMENTS ===== */
+
+/* Tooltip styles for translation buttons */
+.translate-btn {
+    position: relative;
+}
+
+.translate-btn::after {
+    content: attr(title);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #333;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    z-index: 1000;
+}
+
+.translate-btn:hover::after {
+    opacity: 1;
+}
+
+/* Ensure proper spacing in chat messages */
+.chat-message .time {
+    display: block;
+    margin-top: 4px;
+    font-size: 10px;
+    color: #666;
+}
+
+/* Enhanced translation service indicator */
+.translation-service {
+    font-size: 9px;
+    color: #666;
+    font-style: italic;
+    margin-top: 2px;
+    padding-left: 8px;
+    border-left: 2px solid #4CAF50;
+}
+
+/* Hover effects for chat messages */
+.chat-message:hover {
+    background: #444;
+}
+
+/* ===== ACCESSIBILITY ===== */
+
+/* Focus states for keyboard navigation */
+.translate-btn:focus {
+    outline: 2px solid #007bff;
+    outline-offset: 2px;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .translate-btn.google-translate {
+        background: #4285f4;
+        border: 2px solid #4285f4;
+    }
+
+    .translate-btn.deepseek-translate {
+        background: #667eea;
+        border: 2px solid #667eea;
+    }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    .translate-btn,
+    .translated-message,
+    .system-message {
+        animation: none;
+        transition: none;
     }
 }
