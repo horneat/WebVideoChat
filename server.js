@@ -18,13 +18,17 @@ app.set('trust proxy', 1); // Trust first proxy
 app.use(express.json({ limit: '10kb' })); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
+// Update socket.io configuration for better reliability
 const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  pingTimeout: 60000,
-  pingInterval: 25000
+  pingTimeout: 30000,
+  pingInterval: 10000,
+  transports: ['websocket', 'polling'], // Add fallback transport
+  allowUpgrades: true,
+  maxHttpBufferSize: 1e8 // Increase buffer size for slow connections
 });
 
 // Serve static files from public directory
@@ -32,6 +36,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Store active rooms with metadata
 const rooms = new Map();
+
+// Generate shorter room IDs
+function generateShortRoomId() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 8; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// Add connection state tracking
+const connectionStates = new Map();
 
 // Simple route handling
 app.get('/', (req, res) => {
@@ -47,30 +64,56 @@ app.get('/chat/:room', (req, res) => {
 });
 
 app.get('/chat', (req, res) => {
-  const newRoomId = uuidv4();
+  const newRoomId = generateShortRoomId();
   rooms.set(newRoomId, {
     users: new Set(),
     createdAt: Date.now(),
-    lastActivity: Date.now()
+    lastActivity: Date.now(),
+    roomName: `Room ${newRoomId}`,
+    isSecret: false,
+    creator: null
   });
   console.log(`New room created: ${newRoomId}`);
   res.redirect(`/chat/${newRoomId}`);
+});
+
+// Add room creation with name and secret option
+app.post('/api/rooms/create', (req, res) => {
+  const { roomName, isSecret } = req.body;
+  const newRoomId = generateShortRoomId();
+
+  rooms.set(newRoomId, {
+    users: new Set(),
+    createdAt: Date.now(),
+    lastActivity: Date.now(),
+    roomName: roomName || `Room ${newRoomId}`,
+    isSecret: isSecret || false,
+    creator: req.ip // Store creator IP for simple ownership
+  });
+
+  console.log(`New room created: ${newRoomId} - Name: ${roomName} - Secret: ${isSecret}`);
+  res.json({ roomId: newRoomId, roomName: roomName || `Room ${newRoomId}`, isSecret });
 });
 
 // API endpoints
 app.get('/api/rooms', (req, res) => {
   const roomInfo = {};
   rooms.forEach((roomData, roomId) => {
+    // Don't include secret rooms in public API
+    if (roomData.isSecret) return;
+
     roomInfo[roomId] = {
+      roomName: roomData.roomName,
       users: Array.from(roomData.users),
       userCount: roomData.users.size,
       createdAt: roomData.createdAt,
-      lastActivity: roomData.lastActivity
+      lastActivity: roomData.lastActivity,
+      isSecret: roomData.isSecret
     };
   });
 
   res.json({
-    totalRooms: rooms.size,
+    totalRooms: Array.from(rooms.values()).filter(room => !room.isSecret).length,
     activeUsers: Array.from(rooms.values()).reduce((sum, room) => sum + room.users.size, 0),
     rooms: roomInfo
   });
@@ -82,6 +125,17 @@ app.get('/api/room/:roomId', (req, res) => {
   const exists = rooms.has(roomId);
   console.log(`API Check: Room ${roomId} exists: ${exists}`);
   res.json({ exists, roomId });
+});
+
+// Add mobile detection helper endpoint
+app.get('/api/device-info', (req, res) => {
+  const userAgent = req.headers['user-agent'];
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(userAgent);
+
+  res.json({
+    isMobile,
+    userAgent: userAgent.substring(0, 100) // For debugging
+  });
 });
 
 app.get('/health', (req, res) => {
@@ -311,9 +365,19 @@ async function tryDeepSeekTranslate(text, targetLang) {
     }
 }
 
-// Socket.io connection handling
+// Socket.io connection handling with better reconnection logic
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
+  connectionStates.set(socket.id, { connected: true, lastPing: Date.now() });
+
+  // Enhanced ping/pong for connection monitoring
+  socket.on('ping', (data) => {
+    socket.emit('pong', { ...data, serverTime: Date.now() });
+    connectionStates.set(socket.id, {
+      ...connectionStates.get(socket.id),
+      lastPing: Date.now()
+    });
+  });
 
   // Add this handler for room checking
   socket.on('check-room', (roomId, callback) => {
@@ -322,38 +386,73 @@ io.on('connection', (socket) => {
     callback({ exists });
   });
 
-  socket.on('join-room', (roomId, userId) => {
+  // Enhanced room joining with retry mechanism
+  socket.on('join-room', (roomId, userId, callback) => {
     console.log(`User ${userId} joining room ${roomId}`);
 
-    // Create room if it doesn't exist (for direct URL access)
-    if (!rooms.has(roomId)) {
+    // Validate room exists or create with retry
+    let room = rooms.get(roomId);
+    if (!room) {
       console.log(`Room ${roomId} doesn't exist, creating new room`);
-      rooms.set(roomId, {
+      room = {
         users: new Set(),
         createdAt: Date.now(),
-        lastActivity: Date.now()
-      });
+        lastActivity: Date.now(),
+        roomName: `Room ${roomId}`,
+        isSecret: false,
+        creator: null
+      };
+      rooms.set(roomId, room);
     }
 
-    const room = rooms.get(roomId);
+    // Remove user from any previous rooms
+    rooms.forEach((roomData, existingRoomId) => {
+      if (roomData.users.has(userId)) {
+        roomData.users.delete(userId);
+        socket.leave(existingRoomId);
+        console.log(`Removed user ${userId} from previous room ${existingRoomId}`);
+      }
+    });
 
-    // Get existing users before adding new one
-    const otherUsers = Array.from(room.users);
-
-    // Add new user to room
+    // Add user to new room
     room.users.add(userId);
     room.lastActivity = Date.now();
     socket.join(roomId);
 
+    const otherUsers = Array.from(room.users).filter(id => id !== userId);
     console.log(`Room ${roomId} now has users:`, Array.from(room.users));
 
-    // Notify new user about existing users
-    if (otherUsers.length > 0) {
-      socket.emit('existing-users', otherUsers);
+    // Send acknowledgment with room state
+    if (callback) {
+      callback({
+        success: true,
+        otherUsers,
+        roomExists: true
+      });
     }
 
-    // Notify other users about new user
-    socket.to(roomId).emit('user-connected', userId);
+    // Notify other users about new user with retry
+    if (otherUsers.length > 0) {
+      const notifyUsers = () => {
+        socket.to(roomId).emit('user-connected', userId);
+        console.log(`Notified room ${roomId} about new user ${userId}`);
+      };
+
+      // Retry notification for slow connections
+      setTimeout(notifyUsers, 100);
+      setTimeout(notifyUsers, 500);
+    }
+
+    // Send existing users to new user with retry
+    if (otherUsers.length > 0) {
+      const sendExistingUsers = () => {
+        socket.emit('existing-users', otherUsers);
+        console.log(`Sent existing users to ${userId}:`, otherUsers);
+      };
+
+      setTimeout(sendExistingUsers, 150);
+      setTimeout(sendExistingUsers, 600);
+    }
 
     // Handle reconnection to room
     socket.on('rejoin-room', (data) => {
@@ -371,6 +470,41 @@ io.on('connection', (socket) => {
 
       socket.to(data.roomId).emit('user-reconnected', data.userId);
       console.log(`User ${data.userId} rejoined room ${data.roomId}`);
+    });
+
+    // Enhanced WebRTC signaling with retry mechanism
+    const sendWithRetry = (event, data, maxRetries = 3) => {
+      let retries = 0;
+
+      const send = () => {
+        try {
+          socket.to(data.roomId).emit(event, data);
+          console.log(`Sent ${event} from ${data.userId}`);
+        } catch (error) {
+          if (retries < maxRetries) {
+            retries++;
+            setTimeout(send, 500 * retries);
+          } else {
+            console.error(`Failed to send ${event} after ${maxRetries} retries:`, error);
+          }
+        }
+      };
+
+      send();
+    };
+
+    socket.on('offer', (data) => {
+      console.log(`Offer from ${data.userId} to room ${data.roomId}`);
+      sendWithRetry('offer', data);
+    });
+
+    socket.on('answer', (data) => {
+      console.log(`Answer from ${data.userId} to room ${data.roomId}`);
+      sendWithRetry('answer', data);
+    });
+
+    socket.on('ice-candidate', (data) => {
+      sendWithRetry('ice-candidate', data, 5); // More retries for ICE candidates
     });
 
     // Handle user leaving (refresh/close)
@@ -435,30 +569,6 @@ io.on('connection', (socket) => {
     });
 
     // WebRTC signaling handlers
-    socket.on('offer', (data) => {
-      console.log(`Offer from ${data.userId} to room ${roomId}`);
-      socket.to(roomId).emit('offer', {
-        offer: data.offer,
-        userId: data.userId
-      });
-    });
-
-    socket.on('answer', (data) => {
-      console.log(`Answer from ${data.userId} to room ${roomId}`);
-      socket.to(roomId).emit('answer', {
-        answer: data.answer,
-        userId: data.userId
-      });
-    });
-
-    socket.on('ice-candidate', (data) => {
-      console.log(`ICE candidate from ${data.userId} to room ${roomId}`);
-      socket.to(roomId).emit('ice-candidate', {
-        candidate: data.candidate,
-        userId: data.userId
-      });
-    });
-
     socket.on('chat-message', (data) => {
       console.log(`Chat message from ${data.userId} in room ${roomId}: ${data.message}`);
       io.to(roomId).emit('chat-message', {
@@ -494,6 +604,7 @@ io.on('connection', (socket) => {
   // Handle direct socket disconnection
   socket.on('disconnect', (reason) => {
     console.log(`Socket ${socket.id} disconnected:`, reason);
+    connectionStates.delete(socket.id);
 
     rooms.forEach((roomData, roomId) => {
       if (roomData.users.has(socket.id)) {
@@ -533,6 +644,19 @@ setInterval(() => {
   }
 }, 60000);
 
+// Connection state monitoring
+setInterval(() => {
+  const now = Date.now();
+  const FIVE_MINUTES = 5 * 60 * 1000;
+
+  connectionStates.forEach((state, socketId) => {
+    if (now - state.lastPing > FIVE_MINUTES) {
+      console.log(`Cleaning up stale connection: ${socketId}`);
+      connectionStates.delete(socketId);
+    }
+  });
+}, 60000);
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
@@ -549,6 +673,8 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('✅ DeepSeek translation service is available');
   }
   console.log('✅ Google translation service is available (free)');
+  console.log('✅ Enhanced mobile support enabled');
+  console.log('✅ Short room ID generation enabled');
 });
 
 process.on('SIGINT', () => {

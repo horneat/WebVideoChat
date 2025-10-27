@@ -4,14 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Video Chat</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/style.css">
     <base href="/">
 </head>
-<body>
-    <div class="container">
+<body class="bg-gray-900 text-white">
+    <div class="container mx-auto h-screen p-2 flex flex-col">
         <!-- Language Selector -->
-        <div class="language-selector">
-            <select id="languageSelect">
+        <div class="language-selector absolute top-3 right-3 z-50">
+            <select id="languageSelect" class="bg-gray-800 text-white border border-gray-600 rounded-lg px-3 py-1 text-sm">
                 <option value="en">English</option>
                 <option value="ru">Русский</option>
                 <option value="tr">Türkçe</option>
@@ -20,20 +22,20 @@
             </select>
         </div>
 
-        <div class="main-layout">
+        <div class="main-layout flex flex-1 gap-4 h-full">
             <!-- Left Side: Video Area -->
-            <div class="video-section">
-                <div class="video-container ratio-auto">
+            <div class="video-section flex-3 flex flex-col gap-4 min-w-0">
+                <div class="video-container ratio-auto flex-1 relative bg-black rounded-lg overflow-hidden min-h-[300px] md:min-h-[400px]">
                     <!-- Main Video - Remote User -->
-                    <div class="video-wrapper main-video">
-                        <video id="remoteVideo" autoplay playsinline></video>
+                    <div class="video-wrapper main-video w-full h-full">
+                        <video id="remoteVideo" autoplay playsinline class="w-full h-full object-cover"></video>
                         <div class="video-label" id="remoteLabel">Waiting for partner...</div>
                         <div class="quality-indicator quality-high" id="qualityIndicator">HD</div>
                     </div>
 
                     <!-- Preview Video - Local User (Small) -->
                     <div class="video-wrapper preview-video">
-                        <video id="localVideo" autoplay muted playsinline></video>
+                        <video id="localVideo" autoplay muted playsinline class="w-full h-full object-cover"></video>
                         <div class="video-label">You</div>
                     </div>
                 </div>
@@ -47,33 +49,41 @@
                 </div>
             </div>
 
-            <!-- Right Side: Controls and Chat -->
-            <div class="controls-section">
+            <!-- Right Side: Reordered Controls and Chat -->
+            <div class="controls-section flex-2 flex flex-col gap-3 min-w-[280px] max-w-[380px] overflow-y-auto max-h-full pr-1">
                 <!-- Connection Status -->
-                <div id="connectionStatus" class="status" style="display: none;">Connecting...</div>
+                <div id="connectionStatus" class="status hidden">Connecting...</div>
 
-                <!-- Main Controls -->
-                <div class="controls-panel">
-                    <h3>Controls</h3>
-                    <div class="control-buttons">
+                <!-- Chat Section - MOVED TO TOP -->
+                <div class="chat-panel bg-gray-800 rounded-xl p-3 flex-1 flex flex-col min-h-[350px]">
+                    <h3 class="text-blue-400 font-semibold mb-2 text-sm uppercase tracking-wide">Chat</h3>
+                    <div class="chat-container bg-gray-900 rounded-lg flex flex-col overflow-hidden flex-1">
+                        <div id="chatMessages" class="chat-messages flex-1 p-2 overflow-y-auto space-y-1"></div>
+                        <div class="chat-input-container flex p-2 border-t border-gray-700 bg-gray-800">
+                            <input type="text" id="chatInput" placeholder="Type a message..." class="flex-1 bg-gray-700 text-white border-none rounded-2xl px-3 py-1 mr-2 text-sm focus:bg-gray-600 focus:outline-none">
+                            <button id="sendBtn" class="bg-green-500 text-white border-none rounded-2xl px-3 py-1 cursor-pointer font-medium text-sm hover:bg-green-600 transition-colors">Send</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Controls Panel - MOVED TO MIDDLE -->
+                <div class="controls-panel bg-gray-800 rounded-xl p-3">
+                    <h3 class="text-blue-400 font-semibold mb-2 text-sm uppercase tracking-wide">Controls</h3>
+                    <div class="control-buttons space-y-1">
                         <button id="muteBtn" class="control-btn">🔇 Mute Partner</button>
                         <button id="selfMuteBtn" class="control-btn">🤫 Mute Self</button>
                         <button id="videoBtn" class="control-btn">📹 Stop Video</button>
                         <button id="qualityBtn" class="control-btn">⚡ Quality: Balanced</button>
                         <button id="shareBtn" class="control-btn">🔗 Copy Link</button>
-                  			<!--<button id="statsToggleBtn" class="control-btn">📊 Show Stats</button>-->
                         <button id="leaveBtn" class="control-btn" style="background: #6c757d;">🚪 Leave</button>
                         <button id="endCallBtn" class="control-btn" style="background: #dc3545;">📞 End Call</button>
-                        <button onclick="window.currentVideoChat.debugButtonVisibility()" style="background: #ff9800; color: black; padding: 5px; margin: 5px;">
-    Debug Buttons
-</button>
                     </div>
                 </div>
 
                 <!-- Statistics Panel -->
-                <div class="stats-panel">
-                    <h3 id="statsHeader" style="cursor: pointer; user-select: none;">Statistics ▼</h3>
-                    <div id="statsContent" class="stats-content" style="display: none;">
+                <div class="stats-panel bg-gray-800 rounded-xl p-3">
+                    <h3 id="statsHeader" class="text-blue-400 font-semibold mb-2 text-sm uppercase tracking-wide cursor-pointer select-none">Statistics ▼</h3>
+                    <div id="statsContent" class="stats-content hidden grid-cols-2 gap-2">
                         <div class="stat">
                             <span class="stat-label">Bitrate:</span>
                             <span class="stat-value" id="bitrateStat">0 kbps</span>
@@ -90,22 +100,18 @@
                             <span class="stat-label">Packets:</span>
                             <span class="stat-value" id="packetsStat">0</span>
                         </div>
-                    </div>
-                </div>
-                <!-- Chat Section -->
-                <div class="chat-panel">
-                    <h3>Chat</h3>
-                    <div class="chat-container">
-                        <div id="chatMessages" class="chat-messages"></div>
-                        <div class="chat-input-container">
-                            <input type="text" id="chatInput" placeholder="Type a message...">
-                            <button id="sendBtn">Send</button>
+                        <div class="stat">
+                            <span class="stat-label">Quality Mode:</span>
+                            <span class="stat-value" id="qualityStat">Balanced</span>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- System Messages Area -->
+    <div id="systemMessages" class="system-messages"></div>
 
     <!-- Scripts in correct order -->
     <script src="/socket.io/socket.io.js"></script>

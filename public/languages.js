@@ -19,7 +19,7 @@ const languages = {
         instruction2: "Share the room link with your friends",
         instruction3: "Allow camera and microphone access when prompted",
         instruction4: "Start your video conversation!",
-        
+
         // Video Chat translations
         partner: "Partner",
         waitingPartner: "Waiting for partner...",
@@ -42,16 +42,25 @@ const languages = {
         linkCopied: "Link copied to clipboard!",
         partnerDisconnected: "Partner disconnected",
         errorMediaAccess: "Cannot access camera/microphone. Please check permissions.",
-        
+
         // Connection status
         connecting: "Connecting...",
         connected: "Connected",
         reconnecting: "Reconnecting...",
         disconnected: "Disconnected",
-        
+
         // System messages
         videoStopped: "Video stopped",
-        videoStarted: "Video started"
+        videoStarted: "Video started",
+
+        // Room creation translations
+        // New translations for room creation
+        createRoom: "Create Room",
+        roomName: "Room Name",
+        enterRoomName: "Enter room name",
+        secretRoom: "Make this a secret room (won't appear in public list)",
+        cancel: "Cancel",
+        roomNotFound: "Room not found. Please check the room ID or create a new room."
     },
     ru: {
         // Lounge translations
@@ -73,7 +82,7 @@ const languages = {
         instruction2: "Поделитесь ссылкой на комнату с друзьями",
         instruction3: "Разрешите доступ к камере и микрофону при запросе",
         instruction4: "Начните видеозвонок!",
-        
+
         // Video Chat translations
         partner: "Партнер",
         waitingPartner: "Ожидание партнера...",
@@ -96,16 +105,25 @@ const languages = {
         linkCopied: "Ссылка скопирована в буфер!",
         partnerDisconnected: "Партнер отключился",
         errorMediaAccess: "Не удается получить доступ к камере/микрофону. Проверьте разрешения.",
-        
+
         // Connection status
         connecting: "Подключение...",
         connected: "Подключено",
         reconnecting: "Переподключение...",
         disconnected: "Отключено",
-        
+
         // System messages
         videoStopped: "Видео остановлено",
-        videoStarted: "Видео запущено"
+        videoStarted: "Видео запущено",
+
+        // New translations for room creation
+        createRoom: "Создать комнату",
+        roomName: "Название комнаты",
+        enterRoomName: "Введите название комнаты",
+        secretRoom: "Сделать секретной комнатой (будет скрыта в списке)",
+        cancel: "Отменить",
+        roomNotFound: "Комната не найдена. Пожалуйста, проверьте идентификатор комнаты или создайте новую комнату."
+
     },
     tr: {
         // Lounge translations
@@ -127,7 +145,7 @@ const languages = {
         instruction2: "Oda bağlantısını arkadaşlarınızla paylaşın",
         instruction3: "İstendiğinde kamera ve mikrofon erişimine izin verin",
         instruction4: "Video görüşmenize başlayın!",
-        
+
         // Video Chat translations
         partner: "Partner",
         waitingPartner: "Partner bekleniyor...",
@@ -150,13 +168,13 @@ const languages = {
         linkCopied: "Bağlantı panoya kopyalandı!",
         partnerDisconnected: "Partner bağlantısı kesildi",
         errorMediaAccess: "Kamera/mikrofona erişilemiyor. Lütfen izinleri kontrol edin.",
-        
+
         // Connection status
         connecting: "Bağlanılıyor...",
         connected: "Bağlandı",
         reconnecting: "Yeniden bağlanılıyor...",
         disconnected: "Bağlantı kesildi",
-        
+
         // System messages
         videoStopped: "Video durduruldu",
         videoStarted: "Video başlatıldı"
@@ -181,7 +199,7 @@ const languages = {
         instruction2: "Comparta el enlace de la sala con sus amigos",
         instruction3: "Permita el acceso a cámara y micrófono cuando se solicite",
         instruction4: "¡Comience su conversación de video!",
-        
+
         // Video Chat translations
         partner: "Compañero",
         waitingPartner: "Esperando al compañero...",
@@ -204,13 +222,13 @@ const languages = {
         linkCopied: "¡Enlace copiado al portapapeles!",
         partnerDisconnected: "Compañero desconectado",
         errorMediaAccess: "No se puede acceder a la cámara/micrófono. Por favor verifique los permisos.",
-        
+
         // Connection status
         connecting: "Conectando...",
         connected: "Conectado",
         reconnecting: "Reconectando...",
         disconnected: "Desconectado",
-        
+
         // System messages
         videoStopped: "Video detenido",
         videoStarted: "Video iniciado"
@@ -235,7 +253,7 @@ const languages = {
         instruction2: "Partagez le lien de la salle avec vos amis",
         instruction3: "Autorisez l'accès à la caméra et au microphone lorsqu'il est demandé",
         instruction4: "Commencez votre conversation vidéo !",
-        
+
         // Video Chat translations
         partner: "Partenaire",
         waitingPartner: "En attente du partenaire...",
@@ -258,13 +276,13 @@ const languages = {
         linkCopied: "Lien copié dans le presse-papiers !",
         partnerDisconnected: "Partenaire déconnecté",
         errorMediaAccess: "Impossible d'accéder à la caméra/au microphone. Veuillez vérifier les autorisations.",
-        
+
         // Connection status
         connecting: "Connexion...",
         connected: "Connecté",
         reconnecting: "Reconnexion...",
         disconnected: "Déconnecté",
-        
+
         // System messages
         videoStopped: "Vidéo arrêtée",
         videoStarted: "Vidéo démarrée"
@@ -286,7 +304,7 @@ class LanguageManager {
     changeLanguage(lang) {
         this.currentLanguage = lang;
         localStorage.setItem('preferredLanguage', lang);
-        
+
         // Update all elements with data-i18n attribute
         const elements = document.querySelectorAll('[data-i18n]');
         elements.forEach(element => {
@@ -295,18 +313,18 @@ class LanguageManager {
                 element.textContent = languages[lang][key];
             }
         });
-        
+
         // Update placeholders
         const chatInput = document.getElementById('chatInput');
         if (chatInput) {
             chatInput.placeholder = this.translate('chatPlaceholder');
         }
-        
+
         const roomIdInput = document.getElementById('roomIdInput');
         if (roomIdInput) {
             roomIdInput.placeholder = this.translate('enterRoomId');
         }
-        
+
         // Update video chat controls if available
         if (window.currentVideoChat) {
             window.currentVideoChat.updateControlTexts();
