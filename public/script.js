@@ -93,32 +93,45 @@ class VideoChat {
         this.isSlowConnection = isSlowConnection;
         this.notificationManager = window.notificationManager;
 
-        // Enhanced connection settings for mobile with better stability
+        // Enhanced connection settings for better stability
         this.connectionConfig = {
             iceServers: [
+                // Comprehensive STUN servers list
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
                 { urls: 'stun:stun2.l.google.com:19302' },
                 { urls: 'stun:stun3.l.google.com:19302' },
-                { urls: 'stun:stun4.l.google.com:19302' }
+                { urls: 'stun:stun4.l.google.com:19302' },
+                { urls: 'stun:stun.services.mozilla.com:3478' },
+                { urls: 'stun:stun.stunprotocol.org:3478' },
+                { urls: 'stun:global.stun.twilio.com:3478?transport=udp' }
             ],
-            iceCandidatePoolSize: isMobile ? 8 : 10, // More candidates for mobile
-            iceTransportPolicy: isMobile ? 'all' : 'all', // Use all for better connectivity
+            iceCandidatePoolSize: isMobile ? 10 : 15, // More candidates for better connectivity
+            iceTransportPolicy: 'all', // Use all for maximum compatibility
             bundlePolicy: 'max-bundle',
             rtcpMuxPolicy: 'require',
-            // Mobile-specific optimizations
-            iceCheckingTimeout: isMobile ? 5000 : 3000, // Longer timeout for mobile
-            iceConnectionTimeout: isMobile ? 10000 : 5000 // Longer connection timeout
+            // Enhanced timeout settings
+            iceCheckingTimeout: isMobile ? 10000 : 8000, // Longer timeout for mobile
+            iceConnectionTimeout: isMobile ? 30000 : 25000, // Much longer connection timeout
+            // Better ICE candidate gathering
+            iceCandidatePoolSize: 10
         };
 
-        // More aggressive reconnection for mobile
+        // More aggressive but smarter reconnection
         if (this.isMobile) {
-            this.maxReconnectionAttempts = 10; // More attempts for mobile
-            this.reconnectionBaseDelay = 1500; // Shorter base delay
+            this.maxReconnectionAttempts = 8;
+            this.reconnectionBaseDelay = 2000;
         } else {
-            this.maxReconnectionAttempts = 5;
-            this.reconnectionBaseDelay = 1000;
+            this.maxReconnectionAttempts = 6;
+            this.reconnectionBaseDelay = 1500;
         }
+
+        // Connection quality monitoring
+        this.connectionQuality = 'good';
+        this.lastIceState = '';
+        this.pingInterval = null;
+        this.healthCheckInterval = null;
+        this.iceRestartTimeout = null; 
 
         // Ensure language manager is available
         if (!window.languageManager) {
@@ -129,14 +142,27 @@ class VideoChat {
         // Store instance globally for language manager access
         window.currentVideoChat = this;
 
-        this.socket = io();
+        // Enhanced socket connection with better options
+        this.socket = io({
+            transports: ['websocket', 'polling'],
+            upgrade: true,
+            rememberUpgrade: true,
+            timeout: 45000,
+            // Better reconnection settings
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            randomizationFactor: 0.5
+        });
+
         this.localStream = null;
         this.remoteStream = null;
         this.peerConnection = null;
         this.audioContext = null;
         this.audioAnalyser = null;
 
-        // Get room ID from URL path - FIXED
+        // Get room ID from URL path
         const pathParts = window.location.pathname.split('/');
         this.roomId = pathParts[pathParts.length - 1];
 
@@ -238,6 +264,9 @@ class VideoChat {
         this.statsHeader = document.getElementById('statsHeader');
         this.statsContent = document.getElementById('statsContent');
 
+        // NEW: Get the preview video wrapper to hide/show it
+        this.previewVideoWrapper = document.querySelector('.video-wrapper.preview-video');
+
         // Setup language selector if it exists
         if (this.languageSelect) {
             this.languageSelect.value = window.languageManager.currentLanguage;
@@ -324,6 +353,9 @@ class VideoChat {
             await this.initializeMedia();
             this.mediaAccessGranted = true;
 
+            // NEW: Hide local preview initially to prevent audio feedback
+            this.hideLocalPreview();
+
             // Then setup WebRTC connection
             this.createPeerConnection();
 
@@ -353,6 +385,22 @@ class VideoChat {
         } catch (error) {
             console.error('Error initiating connection:', error);
             this.displaySystemMessage(window.languageManager.translate('errorMediaAccess'), false, 'connection');
+        }
+    }
+
+    // NEW: Method to hide local preview video
+    hideLocalPreview() {
+        if (this.previewVideoWrapper) {
+            this.previewVideoWrapper.style.display = 'none';
+            console.log('Local preview video hidden to prevent audio feedback');
+        }
+    }
+
+    // NEW: Method to show local preview video
+    showLocalPreview() {
+        if (this.previewVideoWrapper) {
+            this.previewVideoWrapper.style.display = 'block';
+            console.log('Local preview video shown');
         }
     }
 
@@ -454,10 +502,11 @@ class VideoChat {
             // Apply audio feedback prevention
             this.applyAudioFeedbackPrevention();
 
-            // Show self video in remote section initially
-            this.showSelfVideoInRemoteSection();
-
+            // NEW: Only set local video source, don't show it in remote section
             this.localVideo.srcObject = this.localStream;
+
+            // NEW: Show waiting message in remote video section
+            this.showWaitingForPartner();
 
         } catch (error) {
             console.error('Error accessing media devices:', error);
@@ -484,14 +533,29 @@ class VideoChat {
                 }
 
                 this.applyAudioFeedbackPrevention();
-                this.showSelfVideoInRemoteSection();
+
+                // NEW: Only set local video source, don't show it in remote section
                 this.localVideo.srcObject = this.localStream;
+
+                // NEW: Show waiting message in remote video section
+                this.showWaitingForPartner();
+
                 console.log('Camera and microphone access granted with fallback constraints');
 
             } catch (fallbackError) {
                 console.error('Fallback also failed:', fallbackError);
                 throw new Error('Cannot access camera/microphone. Please check permissions.');
             }
+        }
+    }
+
+    // NEW: Method to show waiting message in remote video section
+    showWaitingForPartner() {
+        if (this.remoteVideo) {
+            this.remoteVideo.srcObject = null;
+            this.updateRemoteLabel('waitingPartner');
+            this.updateQualityIndicator('Waiting', 'quality-medium');
+            console.log('Showing waiting message in remote section');
         }
     }
 
@@ -643,19 +707,14 @@ class VideoChat {
         }
     }
 
-    // NEW FEATURE: Show self video in remote section initially
-    showSelfVideoInRemoteSection() {
-        if (this.remoteVideo && this.localStream) {
-            this.remoteVideo.srcObject = this.localStream;
-            this.updateRemoteLabel('waitingPartner');
-            this.updateQualityIndicator('Ready', 'quality-medium');
-            console.log('Showing self video in remote section');
-        }
-    }
-
-    // Enhanced peer connection creation with mobile optimization - FIXED VERSION
+    // Enhanced peer connection creation with better stability
     createPeerConnection() {
-        console.log('Creating peer connection with mobile optimization');
+        console.log('Creating optimized peer connection');
+
+        // Use server-provided ICE servers if available, otherwise fallback
+        const iceServers = this.getIceServers();
+        this.connectionConfig.iceServers = iceServers;
+
         this.peerConnection = new RTCPeerConnection(this.connectionConfig);
 
         // Create remote stream
@@ -667,8 +726,8 @@ class VideoChat {
             this.remoteVideo.style.transform = 'scale(1.0)';
         }
 
-        // Show self video initially
-        this.showSelfVideoInRemoteSection();
+        // Show waiting message instead of self video
+        this.showWaitingForPartner();
 
         // Add local tracks to peer connection
         if (this.localStream) {
@@ -680,65 +739,73 @@ class VideoChat {
             console.warn('No local stream available when creating peer connection');
         }
 
-        // Enhanced remote track handling with mobile optimization - FIXED VERSION
+        // Enhanced remote track handling with better error recovery
         this.peerConnection.ontrack = (event) => {
             console.log('Received remote track event:', event);
 
             this.reconnectionAttempts = 0;
+            this.connectionQuality = 'good';
 
-            // Handle the remote stream - FIXED: Proper stream handling
-            if (event.streams && event.streams[0]) {
-                console.log('Using remote stream from event:', event.streams[0].id);
-                this.remoteVideo.srcObject = event.streams[0];
-                this.remoteStream = event.streams[0];
-            } else if (event.track) {
-                console.log('Adding remote track to remote stream:', event.track.kind, event.track.id);
-                // Clear existing tracks and add new ones
-                this.remoteStream.getTracks().forEach(track => this.remoteStream.removeTrack(track));
-                this.remoteStream.addTrack(event.track);
-                this.remoteVideo.srcObject = this.remoteStream;
-            }
+            // Handle the remote stream with better error handling
+            try {
+                if (event.streams && event.streams[0]) {
+                    console.log('Using remote stream from event:', event.streams[0].id);
+                    this.remoteVideo.srcObject = event.streams[0];
+                    this.remoteStream = event.streams[0];
+                } else if (event.track) {
+                    console.log('Adding remote track to remote stream:', event.track.kind, event.track.id);
+                    // Clear existing tracks and add new ones
+                    this.remoteStream.getTracks().forEach(track => this.remoteStream.removeTrack(track));
+                    this.remoteStream.addTrack(event.track);
+                    this.remoteVideo.srcObject = this.remoteStream;
+                }
 
-            // Apply mobile optimization to remote video
-            if (this.isMobile && this.remoteVideo) {
-                this.remoteVideo.style.objectFit = 'cover';
-                this.remoteVideo.style.transform = 'scale(1.0)';
-            }
+                // Apply mobile optimization to remote video
+                if (this.isMobile && this.remoteVideo) {
+                    this.remoteVideo.style.objectFit = 'cover';
+                    this.remoteVideo.style.transform = 'scale(1.0)';
+                }
 
-            // Set up track event handlers
-            event.track.onended = () => {
-                console.log('Remote track ended:', event.track.kind);
-                this.handleRemoteDisconnect();
-            };
+                // Set up track event handlers
+                event.track.onended = () => {
+                    console.log('Remote track ended:', event.track.kind);
+                    this.handleRemoteDisconnect();
+                };
 
-            event.track.onmute = () => {
-                console.log('Remote track muted:', event.track.kind);
-            };
+                event.track.onmute = () => {
+                    console.log('Remote track muted:', event.track.kind);
+                };
 
-            event.track.onunmute = () => {
-                console.log('Remote track unmuted:', event.track.kind);
-            };
+                event.track.onunmute = () => {
+                    console.log('Remote track unmuted:', event.track.kind);
+                };
 
-            // Update UI
-            this.remoteVideo.muted = false;
-            this.isRemoteAudioMuted = false;
-            this.muteBtn.textContent = '🔇 ' + window.languageManager.translate('mute');
-            this.muteBtn.classList.remove('active');
+                // Update UI
+                this.remoteVideo.muted = false;
+                this.isRemoteAudioMuted = false;
+                this.muteBtn.textContent = '🔇 ' + window.languageManager.translate('mute');
+                this.muteBtn.classList.remove('active');
 
-            this.updateConnectionStatus('connected');
-            this.updateRemoteLabel('partner');
-            this.updateQualityIndicator('HD', 'quality-high');
-            this.isConnected = true;
+                this.updateConnectionStatus('connected');
+                this.updateRemoteLabel('partner');
+                this.updateQualityIndicator('HD', 'quality-high');
+                this.isConnected = true;
 
-            console.log('Successfully connected to partner video');
+                // Show local preview only when partner is connected
+                this.showLocalPreview();
 
-            // Start stats monitoring if stats are visible
-            if (this.statsContent && this.statsContent.style.display !== 'none') {
-                this.startStatsMonitoring();
+                console.log('Successfully connected to partner video');
+
+                // Start enhanced monitoring
+                this.startEnhancedMonitoring();
+
+            } catch (error) {
+                console.error('Error handling remote track:', error);
+                this.scheduleReconnection();
             }
         };
 
-        // Enhanced ICE connection state handling
+        // Enhanced ICE connection state handling with better recovery
         this.peerConnection.onconnectionstatechange = () => {
             const state = this.peerConnection.connectionState;
             console.log('Connection state changed:', state);
@@ -746,23 +813,49 @@ class VideoChat {
             switch (state) {
                 case 'connected':
                     this.reconnectionAttempts = 0;
+                    this.connectionQuality = 'good';
                     this.updateConnectionStatus('connected');
                     this.updateRemoteLabel('partner');
                     this.updateQualityIndicator('HD', 'quality-high');
                     this.isConnected = true;
+
+                    // Ensure local preview is shown when connected
+                    this.showLocalPreview();
+
+                    // Report good connection quality
+                    this.reportConnectionQuality('good');
                     break;
 
                 case 'disconnected':
-                case 'failed':
+                    this.connectionQuality = 'poor';
                     this.updateConnectionStatus('reconnecting');
                     this.updateRemoteLabel('waitingPartner');
-                    this.updateQualityIndicator('Offline', 'quality-low');
+                    this.updateQualityIndicator('Reconnecting', 'quality-low');
                     this.isConnected = false;
+
+                    // Hide local preview when disconnected
+                    this.hideLocalPreview();
 
                     if (this.statsInterval) {
                         clearInterval(this.statsInterval);
                         this.statsInterval = null;
                     }
+
+                    if (this.mediaAccessGranted) {
+                        // Use smarter reconnection timing
+                        this.scheduleReconnection();
+                    }
+                    break;
+
+                case 'failed':
+                    console.log('Peer connection failed, attempting recovery...');
+                    this.connectionQuality = 'poor';
+                    this.updateConnectionStatus('reconnecting');
+                    this.updateQualityIndicator('Failed', 'quality-low');
+                    this.isConnected = false;
+
+                    this.hideLocalPreview();
+                    this.reportConnectionQuality('poor', 'Connection failed, attempting recovery');
 
                     if (this.mediaAccessGranted) {
                         this.scheduleReconnection();
@@ -771,6 +864,7 @@ class VideoChat {
 
                 case 'connecting':
                     this.updateConnectionStatus('connecting');
+                    this.updateQualityIndicator('Connecting', 'quality-medium');
                     break;
 
                 case 'new':
@@ -779,10 +873,10 @@ class VideoChat {
             }
         };
 
-        // Enhanced ICE candidate handling
+        // Enhanced ICE candidate handling with better logging
         this.peerConnection.onicecandidate = (event) => {
             if (event.candidate) {
-                console.log('Generated ICE candidate:', event.candidate);
+                console.log('Generated ICE candidate:', event.candidate.type, event.candidate.protocol);
                 this.socket.emit('ice-candidate', {
                     candidate: event.candidate,
                     roomId: this.roomId,
@@ -790,19 +884,58 @@ class VideoChat {
                 });
             } else {
                 console.log('All ICE candidates have been generated');
+                this.reportConnectionQuality('good', 'ICE gathering complete');
             }
         };
 
-        // ICE connection state monitoring
+        // ICE connection state monitoring for better diagnostics
         this.peerConnection.oniceconnectionstatechange = () => {
-            console.log('ICE connection state:', this.peerConnection.iceConnectionState);
+            const iceState = this.peerConnection.iceConnectionState;
+            console.log('ICE connection state:', iceState);
+            this.lastIceState = iceState;
+
+            // Report connection quality based on ICE state
+            switch (iceState) {
+                case 'connected':
+                case 'completed':
+                    this.connectionQuality = 'good';
+                    this.reportConnectionQuality('good', 'ICE connected');
+                    break;
+                case 'disconnected':
+                    this.connectionQuality = 'poor';
+                    this.reportConnectionQuality('poor', 'ICE disconnected');
+                    // ADDED: Trigger ICE restart on disconnect
+                    this.scheduleIceRestart();
+                    break;
+                case 'failed':
+                    this.connectionQuality = 'poor';
+                    this.reportConnectionQuality('poor', 'ICE failed');
+                    // ADDED: Immediate ICE restart on failure
+                    console.log('ICE failed, initiating immediate restart...');
+                    this.initiateIceRestart();
+                    break;
+                case 'checking':
+                    this.connectionQuality = 'fair';
+                    this.reportConnectionQuality('fair', 'ICE checking');
+                    break;
+            }
+        };
+
+        // ICE gathering state monitoring
+        this.peerConnection.onicegatheringstatechange = () => {
+            console.log('ICE gathering state:', this.peerConnection.iceGatheringState);
+        };
+
+        // Signaling state monitoring
+        this.peerConnection.onsignalingstatechange = () => {
+            console.log('Signaling state:', this.peerConnection.signalingState);
         };
 
         // Setup socket events
         this.setupSocketEvents();
     }
 
-    // Enhanced offer creation with better error handling - FIXED VERSION
+    // Enhanced offer creation with better error handling and retry
     async createOffer() {
         try {
             if (this.isConnected || !this.mediaAccessGranted) {
@@ -826,7 +959,8 @@ class VideoChat {
 
             const offer = await this.peerConnection.createOffer({
                 offerToReceiveAudio: true,
-                offerToReceiveVideo: true
+                offerToReceiveVideo: true,
+                iceRestart: this.reconnectionAttempts > 0 || data?.iceRestart // Restart ICE on reconnection attempts or explicit restart
             });
 
             console.log('Created offer, setting local description...');
@@ -835,13 +969,21 @@ class VideoChat {
             this.socket.emit('offer', {
                 offer: offer,
                 roomId: this.roomId,
-                userId: this.userId
+                userId: this.userId,
+                attempt: this.reconnectionAttempts + 1
             });
             console.log('Offer sent to signaling server');
 
         } catch (error) {
             console.error('Error creating offer:', error);
             this.displaySystemMessage('Failed to establish connection. Please try again.', false, 'connection');
+
+            // Retry offer creation after a delay
+            if (this.reconnectionAttempts < this.maxReconnectionAttempts) {
+                setTimeout(() => {
+                    this.createOffer();
+                }, 2000);
+            }
         }
     }
 
@@ -885,6 +1027,9 @@ class VideoChat {
                     this.updateConnectionStatus('connected');
                     this.updateRemoteLabel('partner');
                     this.isConnected = true;
+
+                    // NEW: Show local preview when connection succeeds
+                    this.showLocalPreview();
                 }
             }, 2000);
 
@@ -922,8 +1067,8 @@ class VideoChat {
         this.updateQualityIndicator('Offline', 'quality-low');
         this.isConnected = false;
 
-        // NEW FEATURE: Show self video when partner disconnects
-        this.showSelfVideoInRemoteSection();
+        // NEW: Hide local preview when partner disconnects
+        this.hideLocalPreview();
 
         // Reset mute state when partner disconnects
         this.isRemoteAudioMuted = false;
@@ -936,18 +1081,20 @@ class VideoChat {
         }
     }
 
-    // Enhanced reconnection with better notification management
+    // Enhanced reconnection with exponential backoff and quality-based delays
     scheduleReconnection() {
         if (this.reconnectionAttempts < this.maxReconnectionAttempts) {
             this.reconnectionAttempts++;
 
-            const baseDelay = this.isMobile ? 2000 : 1500; // Slightly longer for mobile stability
+            // Use exponential backoff with jitter
+            const baseDelay = this.reconnectionBaseDelay;
+            const maxDelay = this.isMobile ? 30000 : 25000;
             const delay = Math.min(
-                baseDelay * Math.pow(1.5, this.reconnectionAttempts),
-                this.isMobile ? 25000 : 20000 // Shorter max delay
+                baseDelay * Math.pow(1.8, this.reconnectionAttempts - 1) * (0.8 + Math.random() * 0.4),
+                maxDelay
             );
 
-            console.log(`Scheduling reconnection attempt ${this.reconnectionAttempts} in ${delay}ms`);
+            console.log(`Scheduling reconnection attempt ${this.reconnectionAttempts} in ${Math.round(delay)}ms`);
 
             // Only show reconnection message for first few attempts
             if (this.reconnectionAttempts <= 3) {
@@ -965,33 +1112,38 @@ class VideoChat {
             // Only show final failure message
             this.displaySystemMessage('Connection lost. Please refresh the page.', false, 'disconnection');
 
-            // Show self video again when connection fails
-            this.showSelfVideoInRemoteSection();
+            // Ensure local preview is hidden when connection fails
+            this.hideLocalPreview();
         }
     }
 
-    // Enhanced WebRTC reconnection for mobile
+    // Enhanced WebRTC reconnection with better cleanup
     async reconnectWebRTC() {
         console.log('Attempting WebRTC reconnection...');
         try {
-            // Clean up previous connection
+            // Clean up previous connection properly
             if (this.peerConnection) {
                 this.peerConnection.close();
+                this.peerConnection = null;
             }
 
             // Clean up audio monitoring
             this.cleanupAudioMonitoring();
 
+            // Stop enhanced monitoring
+            this.stopEnhancedMonitoring();
+
             // Reinitialize media with optimized settings
             await this.initializeMedia();
 
-            // Create new peer connection
+            // Create new peer connection with fresh configuration
             this.createPeerConnection();
 
             // Rejoin the room
             this.socket.emit('rejoin-room', {
                 roomId: this.roomId,
-                userId: this.userId
+                userId: this.userId,
+                reconnection: true
             });
 
             console.log('WebRTC reconnection initiated');
@@ -1009,16 +1161,87 @@ class VideoChat {
         }
     }
 
-    // Enhanced socket events with better notification management
+    // NEW: ICE restart functionality
+    initiateIceRestart() {
+        console.log('Initiating ICE restart...');
+
+        // Request ICE restart from the other peer
+        this.socket.emit('ice-restart-request', {
+            roomId: this.roomId,
+            userId: this.userId,
+            reason: 'ICE connection failed'
+        });
+
+        // Restart ICE on our side
+        this.restartIce();
+    }
+
+    // NEW: Schedule ICE restart with delay
+    scheduleIceRestart() {
+        if (this.iceRestartTimeout) {
+            clearTimeout(this.iceRestartTimeout);
+        }
+
+        this.iceRestartTimeout = setTimeout(() => {
+            if (this.peerConnection && this.peerConnection.iceConnectionState === 'disconnected') {
+                console.log('ICE still disconnected after delay, initiating restart...');
+                this.initiateIceRestart();
+            }
+        }, 3000); // Wait 3 seconds before restarting
+    }
+
+    // NEW: Restart ICE process
+    async restartIce() {
+        try {
+            if (!this.peerConnection || !this.localStream) {
+                console.log('Cannot restart ICE - no peer connection or local stream');
+                return;
+            }
+
+            console.log('Restarting ICE connection...');
+
+            // Create new offer with iceRestart flag
+            const offer = await this.peerConnection.createOffer({ iceRestart: true });
+            await this.peerConnection.setLocalDescription(offer);
+
+            this.socket.emit('offer', {
+                offer: offer,
+                roomId: this.roomId,
+                userId: this.userId,
+                iceRestart: true
+            });
+
+            console.log('ICE restart offer sent');
+
+        } catch (error) {
+            console.error('Error during ICE restart:', error);
+            // Fallback to full reconnection if ICE restart fails
+            this.scheduleReconnection();
+        }
+    }
+    // Enhanced socket events with connection optimization
     setupSocketEvents() {
-        this.socket.on('user-connected', async (userId) => {
-            console.log('User connected event received:', userId);
+        // Connection optimization event
+        this.socket.on('connection-optimization', (data) => {
+            console.log('Received connection optimization settings:', data);
+            this.applyConnectionOptimization(data);
+        });
+
+        this.socket.on('connection-optimized', (data) => {
+            console.log('Received optimized connection settings:', data);
+            this.connectionConfig.iceServers = data.iceServers;
+        });
+
+        // Enhanced user connection events
+        this.socket.on('user-connected', async (data) => {
+            console.log('User connected event received:', data);
             if (!this.isConnected && this.mediaAccessGranted) {
                 console.log('Attempting to create offer for new user...');
-                // Small delay to ensure everything is ready
+                // Smarter delay based on connection quality
+                const delay = this.connectionQuality === 'good' ? 500 : 1500;
                 setTimeout(() => {
                     this.createOffer();
-                }, 1000); // Increased delay for stability
+                }, delay);
             }
 
             // Reset mute state when new partner connects
@@ -1032,18 +1255,28 @@ class VideoChat {
             }
         });
 
-        this.socket.on('existing-users', (userIds) => {
-            console.log('Existing users in room:', userIds);
-            if (userIds.length > 0 && !this.isConnected && this.mediaAccessGranted) {
+        // ICE restart event from other peer
+        this.socket.on('ice-restart-required', (data) => {
+            console.log('ICE restart required by partner:', data);
+            this.displaySystemMessage('Reconnecting video...', false, 'connection');
+            this.restartIce();
+        });
+
+        // Enhanced existing users handling
+        this.socket.on('existing-users', (data) => {
+            console.log('Existing users in room:', data.users);
+            if (data.users.length > 0 && !this.isConnected && this.mediaAccessGranted) {
                 console.log('Creating offer for existing users...');
+                const delay = this.connectionQuality === 'good' ? 800 : 2000;
                 setTimeout(() => {
                     this.createOffer();
-                }, 1000);
+                }, delay);
             }
         });
 
+        // Enhanced signaling with better error handling
         this.socket.on('offer', async (data) => {
-            console.log('Received offer from partner');
+            console.log('Received offer from partner, attempt:', data.attempt);
             if (this.mediaAccessGranted) {
                 await this.handleOffer(data);
             }
@@ -1059,15 +1292,58 @@ class VideoChat {
             await this.handleIceCandidate(data);
         });
 
-        this.socket.on('user-disconnected', (userId) => {
-            console.log('User disconnected:', userId);
+        // Enhanced connection quality events
+        this.socket.on('partner-connection-quality', (data) => {
+            console.log('Partner connection quality:', data);
+            if (data.quality === 'poor') {
+                this.displaySystemMessage(`Partner connection: ${data.suggestion}`, false, 'connection');
+            }
+        });
+
+        // Connection health monitoring
+        this.socket.on('connection-health-response', (data) => {
+            console.log('Connection health response:', data);
+            this.updateConnectionHealth(data);
+        });
+
+        // Enhanced socket reconnection
+        this.socket.on('reconnect', (attempt) => {
+            console.log('Socket reconnected, attempt:', attempt);
+            if (this.mediaAccessGranted) {
+                this.socket.emit('rejoin-room', {
+                    roomId: this.roomId,
+                    userId: this.userId,
+                    reconnection: true
+                });
+
+                if (this.peerConnection && this.peerConnection.connectionState === 'disconnected') {
+                    this.reconnectWebRTC();
+                }
+            }
+        });
+
+        this.socket.on('reconnect_attempt', (attempt) => {
+            console.log('Socket reconnection attempt:', attempt);
+        });
+
+        this.socket.on('reconnect_error', (error) => {
+            console.log('Socket reconnection error:', error);
+        });
+
+        this.socket.on('reconnect_failed', () => {
+            console.log('Socket reconnection failed');
+            this.displaySystemMessage('Connection lost. Please refresh the page.', false, 'disconnection');
+        });
+
+        this.socket.on('user-disconnected', (data) => {
+            console.log('User disconnected:', data);
             this.handleRemoteDisconnect();
             // Use rate-limited disconnection notification
             this.displaySystemMessage(window.languageManager.translate('partnerDisconnected'), false, 'disconnection');
         });
 
-        this.socket.on('user-left', (userId) => {
-            console.log('User left:', userId);
+        this.socket.on('user-left', (data) => {
+            console.log('User left:', data);
             this.handleRemoteDisconnect();
             this.displaySystemMessage(window.languageManager.translate('partnerDisconnected'), false, 'disconnection');
         });
@@ -1091,7 +1367,7 @@ class VideoChat {
         });
 
         this.socket.on('connect', () => {
-            console.log('Socket reconnected');
+            console.log('Socket connected');
             if (this.mediaAccessGranted) {
                 this.socket.emit('rejoin-room', {
                     roomId: this.roomId,
@@ -1104,8 +1380,8 @@ class VideoChat {
             }
         });
 
-        this.socket.on('user-reconnected', (userId) => {
-            console.log('User reconnected:', userId);
+        this.socket.on('user-reconnected', (data) => {
+            console.log('User reconnected:', data);
             // Reset mute state when partner reconnects
             this.isRemoteAudioMuted = false;
             this.muteBtn.textContent = '🔇 ' + window.languageManager.translate('mute');
@@ -1163,6 +1439,99 @@ class VideoChat {
                 this.displaySystemMessage('Partner disconnected (mobile device)', false, 'disconnection');
             }
         });
+    }
+
+    // New methods for enhanced connection management
+
+    getIceServers() {
+        // Return optimized ICE servers
+        return [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+            { urls: 'stun:stun3.l.google.com:19302' },
+            { urls: 'stun:stun4.l.google.com:19302' },
+            { urls: 'stun:stun.services.mozilla.com:3478' },
+            { urls: 'stun:stun.stunprotocol.org:3478' },
+            { urls: 'stun:global.stun.twilio.com:3478?transport=udp' }
+        ];
+    }
+
+    applyConnectionOptimization(settings) {
+        console.log('Applying connection optimization:', settings);
+        if (settings.iceServers) {
+            this.connectionConfig.iceServers = settings.iceServers;
+        }
+    }
+
+    startEnhancedMonitoring() {
+        // Start ping monitoring for connection quality
+        this.startPingMonitoring();
+
+        // Start health checks
+        this.startHealthChecks();
+
+        // Start connection quality reporting
+        this.startQualityReporting();
+    }
+
+    stopEnhancedMonitoring() {
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
+        if (this.healthCheckInterval) {
+            clearInterval(this.healthCheckInterval);
+            this.healthCheckInterval = null;
+        }
+    }
+
+    startPingMonitoring() {
+        this.pingInterval = setInterval(() => {
+            if (this.socket.connected) {
+                const pingData = {
+                    clientTime: Date.now(),
+                    connectionId: this.socket.id,
+                    roomId: this.roomId
+                };
+                this.socket.emit('ping', pingData);
+            }
+        }, this.isMobile ? 15000 : 20000);
+    }
+
+    startHealthChecks() {
+        this.healthCheckInterval = setInterval(() => {
+            if (this.socket.connected && this.isConnected) {
+                this.socket.emit('connection-health-check', {
+                    timestamp: Date.now(),
+                    roomId: this.roomId,
+                    connectionQuality: this.connectionQuality
+                });
+            }
+        }, 30000); // Every 30 seconds
+    }
+
+    startQualityReporting() {
+        // Report initial connection quality
+        this.reportConnectionQuality('good', 'Connection established');
+    }
+
+    reportConnectionQuality(quality, details = '') {
+        this.connectionQuality = quality;
+        this.socket.emit('connection-quality-report', {
+            quality: quality,
+            details: details,
+            roomId: this.roomId,
+            timestamp: Date.now(),
+            iceState: this.lastIceState
+        });
+    }
+
+    updateConnectionHealth(data) {
+        // Update UI based on connection health
+        if (data.serverLoad && data.serverLoad.memory > 200) {
+            console.warn('Server under heavy load:', data.serverLoad);
+        }
     }
 
     // Enhanced system message with rate limiting
@@ -1964,8 +2333,11 @@ class VideoChat {
         });
     }
 
-    // Cleanup when leaving
+    // Enhanced cleanup
     cleanup() {
+        // Stop all monitoring
+        this.stopEnhancedMonitoring();
+
         if (this.peerConnection) {
             this.peerConnection.close();
         }
@@ -1976,6 +2348,12 @@ class VideoChat {
         if (this.statsInterval) {
             clearInterval(this.statsInterval);
         }
+        if (this.iceRestartTimeout) {
+            clearTimeout(this.iceRestartTimeout);
+            this.iceRestartTimeout = null;
+        }
+        // Report disconnection
+        this.reportConnectionQuality('disconnected', 'User left');
     }
 }
 
@@ -1983,5 +2361,20 @@ class VideoChat {
 window.addEventListener('beforeunload', () => {
     if (window.currentVideoChat) {
         window.currentVideoChat.cleanup();
+    }
+});
+
+// Add page visibility change handling for better resource management
+document.addEventListener('visibilitychange', () => {
+    if (window.currentVideoChat) {
+        if (document.hidden) {
+            // Page is hidden, reduce monitoring frequency
+            window.currentVideoChat.stopEnhancedMonitoring();
+        } else {
+            // Page is visible, resume monitoring if connected
+            if (window.currentVideoChat.isConnected) {
+                window.currentVideoChat.startEnhancedMonitoring();
+            }
+        }
     }
 });

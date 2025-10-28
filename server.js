@@ -18,17 +18,26 @@ app.set('trust proxy', 1); // Trust first proxy
 app.use(express.json({ limit: '10kb' })); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
-// Update socket.io configuration for better reliability
+// Enhanced socket.io configuration for better reliability
 const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  pingTimeout: 30000,
-  pingInterval: 10000,
-  transports: ['websocket', 'polling'], // Add fallback transport
+  pingTimeout: 60000, // Increased from 30s to 60s
+  pingInterval: 25000, // Increased from 10s to 25s
+  transports: ['websocket', 'polling'],
   allowUpgrades: true,
-  maxHttpBufferSize: 1e8 // Increase buffer size for slow connections
+  maxHttpBufferSize: 1e8,
+  connectTimeout: 45000, // Increased connection timeout
+  // Enhanced for better stability
+  perMessageDeflate: false, // Disable compression for better performance
+  httpCompression: false,
+  // Better reconnection settings
+  reconnection: true,
+  reconnectionAttempts: 10,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000
 });
 
 // Serve static files from public directory
@@ -47,11 +56,14 @@ function generateShortRoomId() {
   return result;
 }
 
-// Add connection state tracking
+// Enhanced connection state tracking with better cleanup
 const connectionStates = new Map();
 
-// Add mobile-specific connection optimization
+// Enhanced mobile-specific connection optimization
 const mobileConnections = new Map();
+
+// Connection quality monitoring
+const connectionQuality = new Map();
 
 // Simple route handling
 app.get('/', (req, res) => {
@@ -141,6 +153,20 @@ app.get('/api/device-info', (req, res) => {
   });
 });
 
+// Connection quality monitoring endpoint
+app.get('/api/connection-stats', (req, res) => {
+  const stats = {
+    totalConnections: connectionStates.size,
+    totalRooms: rooms.size,
+    mobileConnections: Array.from(mobileConnections.values()).filter(conn => conn.isMobile).length,
+    connectionQuality: Array.from(connectionQuality.entries()).reduce((acc, [socketId, quality]) => {
+      acc[socketId] = quality;
+      return acc;
+    }, {})
+  };
+  res.json(stats);
+});
+
 app.get('/health', (req, res) => {
   const roomCount = rooms.size;
   const totalUsers = Array.from(rooms.values()).reduce((sum, room) => sum + room.users.size, 0);
@@ -149,7 +175,8 @@ app.get('/health', (req, res) => {
     status: 'ok',
     rooms: roomCount,
     activeUsers: totalUsers,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    connections: connectionStates.size
   });
 });
 
@@ -368,9 +395,25 @@ async function tryDeepSeekTranslate(text, targetLang) {
     }
 }
 
-// Enhanced socket.io connection handling for mobile
+// Enhanced socket.io connection handling with better stability
 io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
+    console.log('User connected:', socket.id, 'from IP:', socket.handshake.address);
+
+    // Enhanced connection state tracking
+    connectionStates.set(socket.id, {
+        connected: true,
+        lastPing: Date.now(),
+        ip: socket.handshake.address,
+        userAgent: socket.handshake.headers['user-agent'],
+        connectedAt: new Date().toISOString()
+    });
+
+    // Connection quality tracking
+    connectionQuality.set(socket.id, {
+        quality: 'good',
+        lastUpdate: Date.now(),
+        disconnectionCount: 0
+    });
 
     // Detect mobile user agent
     const userAgent = socket.handshake.headers['user-agent'];
@@ -380,27 +423,66 @@ io.on('connection', (socket) => {
         mobileConnections.set(socket.id, {
             isMobile: true,
             lastPing: Date.now(),
-            roomId: null
+            roomId: null,
+            connectionType: 'mobile'
         });
         console.log(`Mobile device connected: ${socket.id}`);
     }
 
-    connectionStates.set(socket.id, { connected: true, lastPing: Date.now() });
-
-    // Enhanced ping/pong with mobile optimization
+    // Enhanced ping/pong with connection quality monitoring
     socket.on('ping', (data) => {
-        socket.emit('pong', { ...data, serverTime: Date.now() });
-        connectionStates.set(socket.id, {
-            ...connectionStates.get(socket.id),
-            lastPing: Date.now()
+        const now = Date.now();
+        socket.emit('pong', {
+            ...data,
+            serverTime: now,
+            connectionId: socket.id
         });
+
+        const connectionState = connectionStates.get(socket.id);
+        if (connectionState) {
+            connectionState.lastPing = now;
+            connectionState.pingTime = now - data.clientTime;
+        }
+
+        // Update connection quality
+        const quality = connectionQuality.get(socket.id);
+        if (quality && connectionState) {
+            const ping = connectionState.pingTime;
+            if (ping > 1000) {
+                quality.quality = 'poor';
+            } else if (ping > 500) {
+                quality.quality = 'fair';
+            } else {
+                quality.quality = 'good';
+            }
+            quality.lastUpdate = now;
+        }
 
         // Mobile devices get more frequent pings
         if (isMobile) {
             mobileConnections.set(socket.id, {
                 ...mobileConnections.get(socket.id),
-                lastPing: Date.now()
+                lastPing: now
             });
+        }
+    });
+
+    // Enhanced connection quality reporting
+    socket.on('connection-quality-report', (data) => {
+        console.log(`Connection quality report from ${socket.id}:`, data);
+        const quality = connectionQuality.get(socket.id);
+        if (quality) {
+            quality.quality = data.quality;
+            quality.lastUpdate = Date.now();
+            quality.details = data.details;
+
+            // Notify other users in the same room about quality issues
+            if (data.quality === 'poor' && quality.roomId) {
+                socket.to(quality.roomId).emit('partner-connection-quality', {
+                    quality: data.quality,
+                    suggestion: data.suggestion || 'Network connection is unstable'
+                });
+            }
         }
     });
 
@@ -427,16 +509,34 @@ io.on('connection', (socket) => {
         socket.to(data.roomId).emit('ice-candidate', data);
     });
 
-    // Enhanced room joining with mobile optimization
+    // NEW: Enhanced ICE connection failure recovery
+    socket.on('ice-restart-request', (data) => {
+        console.log(`ICE restart requested by ${data.userId} in room ${data.roomId}`);
+        socket.to(data.roomId).emit('ice-restart-required', {
+            userId: data.userId,
+            roomId: data.roomId,
+            reason: 'ICE connection failed, restart required'
+        });
+    });
+
+    // Enhanced room joining with better error handling and connection tracking
     socket.on('join-room', (roomId, userId, callback) => {
         console.log(`User ${userId} joining room ${roomId}`);
 
-        // Store room info for mobile connections
+        // Store room info for connection tracking
         if (isMobile) {
             mobileConnections.set(socket.id, {
                 ...mobileConnections.get(socket.id),
-                roomId: roomId
+                roomId: roomId,
+                userId: userId
             });
+        }
+
+        // Update connection quality tracking
+        const quality = connectionQuality.get(socket.id);
+        if (quality) {
+            quality.roomId = roomId;
+            quality.userId = userId;
         }
 
         // Validate room exists or create with retry
@@ -471,45 +571,64 @@ io.on('connection', (socket) => {
         const otherUsers = Array.from(room.users).filter(id => id !== userId);
         console.log(`Room ${roomId} now has users:`, Array.from(room.users));
 
-        // Send acknowledgment with room state
+        // Send acknowledgment with room state and connection info
         if (callback) {
             callback({
                 success: true,
                 otherUsers,
-                roomExists: true
+                roomExists: true,
+                connectionId: socket.id,
+                serverTime: Date.now()
             });
         }
 
-        // Notify other users about new user with retry
+        // Enhanced notification with retry and reliability
         if (otherUsers.length > 0) {
             const notifyUsers = () => {
-                socket.to(roomId).emit('user-connected', userId);
+                socket.to(roomId).emit('user-connected', {
+                    userId: userId,
+                    connectionId: socket.id,
+                    timestamp: Date.now()
+                });
                 console.log(`Notified room ${roomId} about new user ${userId}`);
             };
 
-            // Retry notification for slow connections
-            setTimeout(notifyUsers, 100);
-            setTimeout(notifyUsers, 500);
+            // Multiple retry attempts with increasing delays
+            [100, 500, 1000].forEach(delay => {
+                setTimeout(notifyUsers, delay);
+            });
         }
 
-        // Send existing users to new user with retry
+        // Enhanced existing users notification
         if (otherUsers.length > 0) {
             const sendExistingUsers = () => {
-                socket.emit('existing-users', otherUsers);
+                socket.emit('existing-users', {
+                    users: otherUsers,
+                    timestamp: Date.now(),
+                    roomId: roomId
+                });
                 console.log(`Sent existing users to ${userId}:`, otherUsers);
             };
 
-            setTimeout(sendExistingUsers, 150);
-            setTimeout(sendExistingUsers, 600);
+            [150, 600, 1200].forEach(delay => {
+                setTimeout(sendExistingUsers, delay);
+            });
         }
+
+        // Send connection optimization settings
+        socket.emit('connection-optimization', {
+            pingInterval: isMobile ? 15000 : 20000,
+            iceServers: getOptimizedIceServers(isMobile),
+            timeout: 30000
+        });
     });
 
-    // Handle reconnection to room
+    // Handle reconnection to room with enhanced reliability
     socket.on('rejoin-room', (data) => {
         console.log(`User ${data.userId} rejoining room ${data.roomId}`);
 
         if (!rooms.has(data.roomId)) {
-            socket.emit('room-not-found');
+            socket.emit('room-not-found', { roomId: data.roomId });
             return;
         }
 
@@ -518,14 +637,29 @@ io.on('connection', (socket) => {
         rejoinRoom.lastActivity = Date.now();
         socket.join(data.roomId);
 
-        socket.to(data.roomId).emit('user-reconnected', data.userId);
+        // Update connection tracking
+        const quality = connectionQuality.get(socket.id);
+        if (quality) {
+            quality.roomId = data.roomId;
+            quality.userId = data.userId;
+            quality.disconnectionCount = (quality.disconnectionCount || 0) + 1;
+        }
+
+        socket.to(data.roomId).emit('user-reconnected', {
+            userId: data.userId,
+            connectionId: socket.id,
+            timestamp: Date.now()
+        });
         console.log(`User ${data.userId} rejoined room ${data.roomId}`);
     });
 
     // Handle user leaving (refresh/close)
     socket.on('user-leaving', (data) => {
         console.log(`User ${data.userId} is leaving room ${data.roomId}`);
-        socket.to(data.roomId).emit('user-left', data.userId);
+        socket.to(data.roomId).emit('user-left', {
+            userId: data.userId,
+            timestamp: Date.now()
+        });
     });
 
     // Handle remote audio toggle (mute/unmute)
@@ -533,7 +667,8 @@ io.on('connection', (socket) => {
         console.log(`User ${data.userId} ${data.muted ? 'muted' : 'unmuted'} their audio in room ${data.roomId}`);
         socket.to(data.roomId).emit('remote-audio-toggle', {
             userId: data.userId,
-            muted: data.muted
+            muted: data.muted,
+            timestamp: Date.now()
         });
     });
 
@@ -543,7 +678,8 @@ io.on('connection', (socket) => {
 
         io.to(data.roomId).emit('conversation-ended', {
             endedBy: data.userId,
-            message: 'Conversation ended by partner'
+            message: 'Conversation ended by partner',
+            timestamp: Date.now()
         });
 
         const room = rooms.get(data.roomId);
@@ -565,7 +701,8 @@ io.on('connection', (socket) => {
             room.users.delete(data.userId);
             socket.to(data.roomId).emit('user-left-voluntarily', {
                 userId: data.userId,
-                message: 'Partner left the conversation'
+                message: 'Partner left the conversation',
+                timestamp: Date.now()
             });
 
             room.lastActivity = Date.now();
@@ -583,7 +720,7 @@ io.on('connection', (socket) => {
         socket.emit('redirect-to-lounge');
     });
 
-    // Chat message handler
+    // Enhanced chat message handler with delivery confirmation
     socket.on('chat-message', (data) => {
         console.log(`Chat message from ${data.userId} in room ${data.roomId}: ${data.message}`);
         socket.to(data.roomId).emit('chat-message', {
@@ -591,13 +728,38 @@ io.on('connection', (socket) => {
             message: data.message,
             messageId: data.messageId,
             timestamp: data.timestamp || new Date().toLocaleTimeString(),
-            detectedLang: data.detectedLang
+            detectedLang: data.detectedLang,
+            delivered: true
         });
+
+        // Send delivery confirmation
+        socket.emit('message-delivered', {
+            messageId: data.messageId,
+            timestamp: Date.now()
+        });
+    });
+
+    // Connection health monitoring
+    socket.on('connection-health-check', (data) => {
+        const response = {
+            timestamp: Date.now(),
+            connectionId: socket.id,
+            serverLoad: getServerLoad(),
+            activeConnections: connectionStates.size
+        };
+        socket.emit('connection-health-response', response);
     });
 
     // Enhanced mobile disconnection handling
     socket.on('disconnect', (reason) => {
-        console.log(`Socket ${socket.id} disconnected:`, reason);
+        console.log(`Socket ${socket.id} disconnected:`, reason, 'IP:', socket.handshake.address);
+
+        // Update connection quality
+        const quality = connectionQuality.get(socket.id);
+        if (quality) {
+            quality.lastDisconnect = Date.now();
+            quality.disconnectReason = reason;
+        }
 
         // Special handling for mobile disconnections
         if (isMobile) {
@@ -607,7 +769,8 @@ io.on('connection', (socket) => {
                 // Notify room about mobile disconnection
                 socket.to(mobileInfo.roomId).emit('mobile-user-disconnected', {
                     userId: socket.id,
-                    reason: reason
+                    reason: reason,
+                    timestamp: Date.now()
                 });
             }
         }
@@ -615,11 +778,16 @@ io.on('connection', (socket) => {
         connectionStates.delete(socket.id);
         mobileConnections.delete(socket.id);
 
+        // Clean up rooms
         rooms.forEach((roomData, roomId) => {
             if (roomData.users.has(socket.id)) {
                 roomData.users.delete(socket.id);
                 roomData.lastActivity = Date.now();
-                socket.to(roomId).emit('user-disconnected', socket.id);
+                socket.to(roomId).emit('user-disconnected', {
+                    userId: socket.id,
+                    reason: reason,
+                    timestamp: Date.now()
+                });
 
                 if (roomData.users.size === 0) {
                     setTimeout(() => {
@@ -631,14 +799,22 @@ io.on('connection', (socket) => {
                 }
             }
         });
+
+        // Clean up connection quality data after a delay
+        setTimeout(() => {
+            connectionQuality.delete(socket.id);
+        }, 60000);
     });
 
-    // Add mobile-specific keep-alive
+    // Enhanced mobile keep-alive with connection monitoring
     if (isMobile) {
         // Send periodic keep-alive to mobile clients
         const keepAliveInterval = setInterval(() => {
             if (socket.connected) {
-                socket.emit('mobile-keep-alive', { timestamp: Date.now() });
+                socket.emit('mobile-keep-alive', {
+                    timestamp: Date.now(),
+                    connectionId: socket.id
+                });
             } else {
                 clearInterval(keepAliveInterval);
             }
@@ -648,7 +824,67 @@ io.on('connection', (socket) => {
             clearInterval(keepAliveInterval);
         });
     }
+
+    // Send initial connection optimization settings
+    setTimeout(() => {
+        socket.emit('connection-optimized', {
+            iceServers: getOptimizedIceServers(isMobile),
+            timeouts: {
+                iceConnection: 30000,
+                iceGathering: 10000,
+                peerConnection: 45000
+            },
+            constraints: {
+                audio: true,
+                video: {
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 },
+                    frameRate: { ideal: 24 }
+                }
+            }
+        });
+    }, 1000);
 });
+
+// Enhanced ICE servers configuration
+function getOptimizedIceServers(isMobile = false) {
+    const iceServers = [
+        // Google STUN servers
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:stun4.l.google.com:19302' },
+
+        // Additional reliable STUN servers
+        { urls: 'stun:stun.services.mozilla.com:3478' },
+        { urls: 'stun:stun.stunprotocol.org:3478' },
+
+        // Twilio STUN (very reliable)
+        { urls: 'stun:global.stun.twilio.com:3478?transport=udp' }
+    ];
+
+    // For mobile devices, add more STUN servers
+    if (isMobile) {
+        iceServers.push(
+            { urls: 'stun:stun.voip.blackberry.com:3478' },
+            { urls: 'stun:stun.voipgate.com:3478' }
+        );
+    }
+
+    return iceServers;
+}
+
+// Server load monitoring
+function getServerLoad() {
+    const used = process.memoryUsage();
+    return {
+        memory: Math.round(used.heapUsed / 1024 / 1024 * 100) / 100,
+        connections: connectionStates.size,
+        rooms: rooms.size,
+        timestamp: Date.now()
+    };
+}
 
 // Room cleanup interval
 setInterval(() => {
@@ -669,7 +905,7 @@ setInterval(() => {
     }
 }, 60000);
 
-// Connection state monitoring
+// Enhanced connection state monitoring
 setInterval(() => {
     const now = Date.now();
     const FIVE_MINUTES = 5 * 60 * 1000;
@@ -688,6 +924,16 @@ setInterval(() => {
             mobileConnections.delete(socketId);
         }
     });
+
+    // Clean up old connection quality data
+    connectionQuality.forEach((quality, socketId) => {
+        if (now - quality.lastUpdate > FIVE_MINUTES) {
+            connectionQuality.delete(socketId);
+        }
+    });
+
+    // Log server status periodically
+    console.log(`Server Status - Connections: ${connectionStates.size}, Rooms: ${rooms.size}, Memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
 }, 60000);
 
 const PORT = process.env.PORT || 3000;
@@ -696,6 +942,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`Access via: http://localhost:${PORT}`);
     console.log(`Lounge: http://localhost:${PORT}/lounge`);
     console.log(`Health check: http://localhost:${PORT}/health`);
+    console.log(`Connection stats: http://localhost:${PORT}/api/connection-stats`);
     console.log(`Active rooms: ${rooms.size}`);
 
     // Check translation services availability
@@ -709,11 +956,15 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('✅ Enhanced mobile support enabled');
     console.log('✅ Short room ID generation enabled');
     console.log('✅ Audio feedback prevention enabled');
+    console.log('✅ Connection optimization enabled');
+    console.log('✅ Multiple STUN servers configured');
+    console.log('✅ ICE restart capability enabled');
 });
 
 process.on('SIGINT', () => {
     console.log('Shutting down server gracefully...');
     console.log(`Active rooms before shutdown: ${rooms.size}`);
+    console.log(`Active connections: ${connectionStates.size}`);
 
     io.emit('server-shutdown');
 
