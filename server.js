@@ -50,6 +50,9 @@ function generateShortRoomId() {
 // Add connection state tracking
 const connectionStates = new Map();
 
+// Add mobile-specific connection optimization
+const mobileConnections = new Map();
+
 // Simple route handling
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'lounge.html'));
@@ -365,328 +368,359 @@ async function tryDeepSeekTranslate(text, targetLang) {
     }
 }
 
-// Socket.io connection handling with better reconnection logic
+// Enhanced socket.io connection handling for mobile
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
-  connectionStates.set(socket.id, { connected: true, lastPing: Date.now() });
+    console.log('User connected:', socket.id);
 
-  // Enhanced ping/pong for connection monitoring
-  socket.on('ping', (data) => {
-    socket.emit('pong', { ...data, serverTime: Date.now() });
-    connectionStates.set(socket.id, {
-      ...connectionStates.get(socket.id),
-      lastPing: Date.now()
-    });
-  });
+    // Detect mobile user agent
+    const userAgent = socket.handshake.headers['user-agent'];
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(userAgent);
 
-  // Add this handler for room checking
-  socket.on('check-room', (roomId, callback) => {
-    const exists = rooms.has(roomId);
-    console.log(`Socket Check: Room ${roomId} exists: ${exists}`);
-    callback({ exists });
-  });
-
-  // Enhanced room joining with retry mechanism
-  socket.on('join-room', (roomId, userId, callback) => {
-    console.log(`User ${userId} joining room ${roomId}`);
-
-    // Validate room exists or create with retry
-    let room = rooms.get(roomId);
-    if (!room) {
-      console.log(`Room ${roomId} doesn't exist, creating new room`);
-      room = {
-        users: new Set(),
-        createdAt: Date.now(),
-        lastActivity: Date.now(),
-        roomName: `Room ${roomId}`,
-        isSecret: false,
-        creator: null
-      };
-      rooms.set(roomId, room);
+    if (isMobile) {
+        mobileConnections.set(socket.id, {
+            isMobile: true,
+            lastPing: Date.now(),
+            roomId: null
+        });
+        console.log(`Mobile device connected: ${socket.id}`);
     }
 
-    // Remove user from any previous rooms
-    rooms.forEach((roomData, existingRoomId) => {
-      if (roomData.users.has(userId)) {
-        roomData.users.delete(userId);
-        socket.leave(existingRoomId);
-        console.log(`Removed user ${userId} from previous room ${existingRoomId}`);
-      }
-    });
+    connectionStates.set(socket.id, { connected: true, lastPing: Date.now() });
 
-    // Add user to new room
-    room.users.add(userId);
-    room.lastActivity = Date.now();
-    socket.join(roomId);
+    // Enhanced ping/pong with mobile optimization
+    socket.on('ping', (data) => {
+        socket.emit('pong', { ...data, serverTime: Date.now() });
+        connectionStates.set(socket.id, {
+            ...connectionStates.get(socket.id),
+            lastPing: Date.now()
+        });
 
-    const otherUsers = Array.from(room.users).filter(id => id !== userId);
-    console.log(`Room ${roomId} now has users:`, Array.from(room.users));
-
-    // Send acknowledgment with room state
-    if (callback) {
-      callback({
-        success: true,
-        otherUsers,
-        roomExists: true
-      });
-    }
-
-    // Notify other users about new user with retry
-    if (otherUsers.length > 0) {
-      const notifyUsers = () => {
-        socket.to(roomId).emit('user-connected', userId);
-        console.log(`Notified room ${roomId} about new user ${userId}`);
-      };
-
-      // Retry notification for slow connections
-      setTimeout(notifyUsers, 100);
-      setTimeout(notifyUsers, 500);
-    }
-
-    // Send existing users to new user with retry
-    if (otherUsers.length > 0) {
-      const sendExistingUsers = () => {
-        socket.emit('existing-users', otherUsers);
-        console.log(`Sent existing users to ${userId}:`, otherUsers);
-      };
-
-      setTimeout(sendExistingUsers, 150);
-      setTimeout(sendExistingUsers, 600);
-    }
-
-    // Handle reconnection to room
-    socket.on('rejoin-room', (data) => {
-      console.log(`User ${data.userId} rejoining room ${data.roomId}`);
-
-      if (!rooms.has(data.roomId)) {
-        socket.emit('room-not-found');
-        return;
-      }
-
-      const rejoinRoom = rooms.get(data.roomId);
-      rejoinRoom.users.add(data.userId);
-      rejoinRoom.lastActivity = Date.now();
-      socket.join(data.roomId);
-
-      socket.to(data.roomId).emit('user-reconnected', data.userId);
-      console.log(`User ${data.userId} rejoined room ${data.roomId}`);
-    });
-
-    // Enhanced WebRTC signaling with retry mechanism
-    const sendWithRetry = (event, data, maxRetries = 3) => {
-      let retries = 0;
-
-      const send = () => {
-        try {
-          socket.to(data.roomId).emit(event, data);
-          console.log(`Sent ${event} from ${data.userId}`);
-        } catch (error) {
-          if (retries < maxRetries) {
-            retries++;
-            setTimeout(send, 500 * retries);
-          } else {
-            console.error(`Failed to send ${event} after ${maxRetries} retries:`, error);
-          }
+        // Mobile devices get more frequent pings
+        if (isMobile) {
+            mobileConnections.set(socket.id, {
+                ...mobileConnections.get(socket.id),
+                lastPing: Date.now()
+            });
         }
-      };
+    });
 
-      send();
-    };
+    // Add this handler for room checking
+    socket.on('check-room', (roomId, callback) => {
+        const exists = rooms.has(roomId);
+        console.log(`Socket Check: Room ${roomId} exists: ${exists}`);
+        callback({ exists });
+    });
 
+    // WebRTC signaling handlers - MOVED OUTSIDE join-room to fix video connectivity
     socket.on('offer', (data) => {
-      console.log(`Offer from ${data.userId} to room ${data.roomId}`);
-      sendWithRetry('offer', data);
+        console.log(`Offer received from ${data.userId} for room ${data.roomId}`);
+        socket.to(data.roomId).emit('offer', data);
     });
 
     socket.on('answer', (data) => {
-      console.log(`Answer from ${data.userId} to room ${data.roomId}`);
-      sendWithRetry('answer', data);
+        console.log(`Answer received from ${data.userId} for room ${data.roomId}`);
+        socket.to(data.roomId).emit('answer', data);
     });
 
     socket.on('ice-candidate', (data) => {
-      sendWithRetry('ice-candidate', data, 5); // More retries for ICE candidates
+        console.log(`ICE candidate from ${data.userId} for room ${data.roomId}`);
+        socket.to(data.roomId).emit('ice-candidate', data);
+    });
+
+    // Enhanced room joining with mobile optimization
+    socket.on('join-room', (roomId, userId, callback) => {
+        console.log(`User ${userId} joining room ${roomId}`);
+
+        // Store room info for mobile connections
+        if (isMobile) {
+            mobileConnections.set(socket.id, {
+                ...mobileConnections.get(socket.id),
+                roomId: roomId
+            });
+        }
+
+        // Validate room exists or create with retry
+        let room = rooms.get(roomId);
+        if (!room) {
+            console.log(`Room ${roomId} doesn't exist, creating new room`);
+            room = {
+                users: new Set(),
+                createdAt: Date.now(),
+                lastActivity: Date.now(),
+                roomName: `Room ${roomId}`,
+                isSecret: false,
+                creator: null
+            };
+            rooms.set(roomId, room);
+        }
+
+        // Remove user from any previous rooms
+        rooms.forEach((roomData, existingRoomId) => {
+            if (roomData.users.has(userId)) {
+                roomData.users.delete(userId);
+                socket.leave(existingRoomId);
+                console.log(`Removed user ${userId} from previous room ${existingRoomId}`);
+            }
+        });
+
+        // Add user to new room
+        room.users.add(userId);
+        room.lastActivity = Date.now();
+        socket.join(roomId);
+
+        const otherUsers = Array.from(room.users).filter(id => id !== userId);
+        console.log(`Room ${roomId} now has users:`, Array.from(room.users));
+
+        // Send acknowledgment with room state
+        if (callback) {
+            callback({
+                success: true,
+                otherUsers,
+                roomExists: true
+            });
+        }
+
+        // Notify other users about new user with retry
+        if (otherUsers.length > 0) {
+            const notifyUsers = () => {
+                socket.to(roomId).emit('user-connected', userId);
+                console.log(`Notified room ${roomId} about new user ${userId}`);
+            };
+
+            // Retry notification for slow connections
+            setTimeout(notifyUsers, 100);
+            setTimeout(notifyUsers, 500);
+        }
+
+        // Send existing users to new user with retry
+        if (otherUsers.length > 0) {
+            const sendExistingUsers = () => {
+                socket.emit('existing-users', otherUsers);
+                console.log(`Sent existing users to ${userId}:`, otherUsers);
+            };
+
+            setTimeout(sendExistingUsers, 150);
+            setTimeout(sendExistingUsers, 600);
+        }
+    });
+
+    // Handle reconnection to room
+    socket.on('rejoin-room', (data) => {
+        console.log(`User ${data.userId} rejoining room ${data.roomId}`);
+
+        if (!rooms.has(data.roomId)) {
+            socket.emit('room-not-found');
+            return;
+        }
+
+        const rejoinRoom = rooms.get(data.roomId);
+        rejoinRoom.users.add(data.userId);
+        rejoinRoom.lastActivity = Date.now();
+        socket.join(data.roomId);
+
+        socket.to(data.roomId).emit('user-reconnected', data.userId);
+        console.log(`User ${data.userId} rejoined room ${data.roomId}`);
     });
 
     // Handle user leaving (refresh/close)
     socket.on('user-leaving', (data) => {
-      console.log(`User ${data.userId} is leaving room ${data.roomId}`);
-      socket.to(data.roomId).emit('user-left', data.userId);
+        console.log(`User ${data.userId} is leaving room ${data.roomId}`);
+        socket.to(data.roomId).emit('user-left', data.userId);
     });
 
     // Handle remote audio toggle (mute/unmute)
     socket.on('remote-audio-toggle', (data) => {
-      console.log(`User ${data.userId} ${data.muted ? 'muted' : 'unmuted'} their audio in room ${data.roomId}`);
-      socket.to(data.roomId).emit('remote-audio-toggle', {
-        userId: data.userId,
-        muted: data.muted
-      });
+        console.log(`User ${data.userId} ${data.muted ? 'muted' : 'unmuted'} their audio in room ${data.roomId}`);
+        socket.to(data.roomId).emit('remote-audio-toggle', {
+            userId: data.userId,
+            muted: data.muted
+        });
     });
 
     // Handle end conversation
     socket.on('end-conversation', (data) => {
-      console.log(`User ${data.userId} ended conversation in room ${data.roomId}`);
+        console.log(`User ${data.userId} ended conversation in room ${data.roomId}`);
 
-      io.to(data.roomId).emit('conversation-ended', {
-        endedBy: data.userId,
-        message: 'Conversation ended by partner'
-      });
-
-      const room = rooms.get(data.roomId);
-      if (room) {
-        room.users.forEach(userId => {
-          io.to(userId).emit('redirect-to-lounge');
+        io.to(data.roomId).emit('conversation-ended', {
+            endedBy: data.userId,
+            message: 'Conversation ended by partner'
         });
-        rooms.delete(data.roomId);
-        console.log(`Room ${data.roomId} deleted by ${data.userId}`);
-      }
+
+        const room = rooms.get(data.roomId);
+        if (room) {
+            room.users.forEach(userId => {
+                io.to(userId).emit('redirect-to-lounge');
+            });
+            rooms.delete(data.roomId);
+            console.log(`Room ${data.roomId} deleted by ${data.userId}`);
+        }
     });
 
     // Handle user voluntarily leaving
     socket.on('leave-room', (data) => {
-      console.log(`User ${data.userId} voluntarily leaving room ${data.roomId}`);
+        console.log(`User ${data.userId} voluntarily leaving room ${data.roomId}`);
 
-      const room = rooms.get(data.roomId);
-      if (room) {
-        room.users.delete(data.userId);
-        socket.to(data.roomId).emit('user-left-voluntarily', {
-          userId: data.userId,
-          message: 'Partner left the conversation'
-        });
+        const room = rooms.get(data.roomId);
+        if (room) {
+            room.users.delete(data.userId);
+            socket.to(data.roomId).emit('user-left-voluntarily', {
+                userId: data.userId,
+                message: 'Partner left the conversation'
+            });
 
-        room.lastActivity = Date.now();
+            room.lastActivity = Date.now();
 
-        if (room.users.size === 0) {
-          setTimeout(() => {
-            if (rooms.get(data.roomId) && rooms.get(data.roomId).users.size === 0) {
-              rooms.delete(data.roomId);
-              console.log(`Room ${data.roomId} deleted (empty)`);
+            if (room.users.size === 0) {
+                setTimeout(() => {
+                    if (rooms.get(data.roomId) && rooms.get(data.roomId).users.size === 0) {
+                        rooms.delete(data.roomId);
+                        console.log(`Room ${data.roomId} deleted (empty)`);
+                    }
+                }, 30000);
             }
-          }, 30000);
         }
-      }
 
-      socket.emit('redirect-to-lounge');
+        socket.emit('redirect-to-lounge');
     });
 
-    // WebRTC signaling handlers
+    // Chat message handler
     socket.on('chat-message', (data) => {
-      console.log(`Chat message from ${data.userId} in room ${roomId}: ${data.message}`);
-      io.to(roomId).emit('chat-message', {
-        userId: data.userId,
-        message: data.message,
-        messageId: data.messageId,
-        timestamp: data.timestamp || new Date().toLocaleTimeString(),
-        detectedLang: data.detectedLang
-      });
+        console.log(`Chat message from ${data.userId} in room ${data.roomId}: ${data.message}`);
+        socket.to(data.roomId).emit('chat-message', {
+            userId: data.userId,
+            message: data.message,
+            messageId: data.messageId,
+            timestamp: data.timestamp || new Date().toLocaleTimeString(),
+            detectedLang: data.detectedLang
+        });
     });
 
-    socket.on('disconnect', () => {
-      console.log(`User ${userId} disconnected from room ${roomId}`);
+    // Enhanced mobile disconnection handling
+    socket.on('disconnect', (reason) => {
+        console.log(`Socket ${socket.id} disconnected:`, reason);
 
-      const room = rooms.get(roomId);
-      if (room) {
-        room.users.delete(userId);
-        room.lastActivity = Date.now();
-        socket.to(roomId).emit('user-disconnected', userId);
-
-        if (room.users.size === 0) {
-          setTimeout(() => {
-            if (rooms.get(roomId) && rooms.get(roomId).users.size === 0) {
-              rooms.delete(roomId);
-              console.log(`Room ${roomId} deleted (empty)`);
+        // Special handling for mobile disconnections
+        if (isMobile) {
+            console.log(`Mobile device ${socket.id} disconnected: ${reason}`);
+            const mobileInfo = mobileConnections.get(socket.id);
+            if (mobileInfo && mobileInfo.roomId) {
+                // Notify room about mobile disconnection
+                socket.to(mobileInfo.roomId).emit('mobile-user-disconnected', {
+                    userId: socket.id,
+                    reason: reason
+                });
             }
-          }, 30000);
         }
-      }
-    });
-  });
 
-  // Handle direct socket disconnection
-  socket.on('disconnect', (reason) => {
-    console.log(`Socket ${socket.id} disconnected:`, reason);
-    connectionStates.delete(socket.id);
+        connectionStates.delete(socket.id);
+        mobileConnections.delete(socket.id);
 
-    rooms.forEach((roomData, roomId) => {
-      if (roomData.users.has(socket.id)) {
-        roomData.users.delete(socket.id);
-        roomData.lastActivity = Date.now();
-        socket.to(roomId).emit('user-disconnected', socket.id);
+        rooms.forEach((roomData, roomId) => {
+            if (roomData.users.has(socket.id)) {
+                roomData.users.delete(socket.id);
+                roomData.lastActivity = Date.now();
+                socket.to(roomId).emit('user-disconnected', socket.id);
 
-        if (roomData.users.size === 0) {
-          setTimeout(() => {
-            if (rooms.get(roomId) && rooms.get(roomId).users.size === 0) {
-              rooms.delete(roomId);
-              console.log(`Room ${roomId} cleaned up after disconnect`);
+                if (roomData.users.size === 0) {
+                    setTimeout(() => {
+                        if (rooms.get(roomId) && rooms.get(roomId).users.size === 0) {
+                            rooms.delete(roomId);
+                            console.log(`Room ${roomId} cleaned up after disconnect`);
+                        }
+                    }, 30000);
+                }
             }
-          }, 30000);
-        }
-      }
+        });
     });
-  });
+
+    // Add mobile-specific keep-alive
+    if (isMobile) {
+        // Send periodic keep-alive to mobile clients
+        const keepAliveInterval = setInterval(() => {
+            if (socket.connected) {
+                socket.emit('mobile-keep-alive', { timestamp: Date.now() });
+            } else {
+                clearInterval(keepAliveInterval);
+            }
+        }, 15000); // Every 15 seconds for mobile
+
+        socket.on('disconnect', () => {
+            clearInterval(keepAliveInterval);
+        });
+    }
 });
 
 // Room cleanup interval
 setInterval(() => {
-  const now = Date.now();
-  const ONE_HOUR = 60 * 60 * 1000;
-  let roomsCleaned = 0;
+    const now = Date.now();
+    const ONE_HOUR = 60 * 60 * 1000;
+    let roomsCleaned = 0;
 
-  rooms.forEach((roomData, roomId) => {
-    if (roomData.users.size === 0 && (now - roomData.lastActivity) > ONE_HOUR) {
-      rooms.delete(roomId);
-      roomsCleaned++;
-      console.log(`Cleaned up inactive room: ${roomId}`);
+    rooms.forEach((roomData, roomId) => {
+        if (roomData.users.size === 0 && (now - roomData.lastActivity) > ONE_HOUR) {
+            rooms.delete(roomId);
+            roomsCleaned++;
+            console.log(`Cleaned up inactive room: ${roomId}`);
+        }
+    });
+
+    if (roomsCleaned > 0) {
+        console.log(`Cleaned up ${roomsCleaned} inactive rooms`);
     }
-  });
-
-  if (roomsCleaned > 0) {
-    console.log(`Cleaned up ${roomsCleaned} inactive rooms`);
-  }
 }, 60000);
 
 // Connection state monitoring
 setInterval(() => {
-  const now = Date.now();
-  const FIVE_MINUTES = 5 * 60 * 1000;
+    const now = Date.now();
+    const FIVE_MINUTES = 5 * 60 * 1000;
 
-  connectionStates.forEach((state, socketId) => {
-    if (now - state.lastPing > FIVE_MINUTES) {
-      console.log(`Cleaning up stale connection: ${socketId}`);
-      connectionStates.delete(socketId);
-    }
-  });
+    connectionStates.forEach((state, socketId) => {
+        if (now - state.lastPing > FIVE_MINUTES) {
+            console.log(`Cleaning up stale connection: ${socketId}`);
+            connectionStates.delete(socketId);
+        }
+    });
+
+    // Clean up old mobile connections
+    mobileConnections.forEach((info, socketId) => {
+        if (now - info.lastPing > FIVE_MINUTES) {
+            console.log(`Cleaning up stale mobile connection: ${socketId}`);
+            mobileConnections.delete(socketId);
+        }
+    });
 }, 60000);
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Access via: http://localhost:${PORT}`);
-  console.log(`Lounge: http://localhost:${PORT}/lounge`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
-  console.log(`Active rooms: ${rooms.size}`);
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Access via: http://localhost:${PORT}`);
+    console.log(`Lounge: http://localhost:${PORT}/lounge`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
+    console.log(`Active rooms: ${rooms.size}`);
 
-  // Check translation services availability
-  if (!process.env.DEEPSEEK_API_KEY) {
-    console.warn('⚠️  WARNING: DEEPSEEK_API_KEY not found in environment variables');
-    console.warn('   DeepSeek translation will not be available');
-  } else {
-    console.log('✅ DeepSeek translation service is available');
-  }
-  console.log('✅ Google translation service is available (free)');
-  console.log('✅ Enhanced mobile support enabled');
-  console.log('✅ Short room ID generation enabled');
+    // Check translation services availability
+    if (!process.env.DEEPSEEK_API_KEY) {
+        console.warn('⚠️  WARNING: DEEPSEEK_API_KEY not found in environment variables');
+        console.warn('   DeepSeek translation will not be available');
+    } else {
+        console.log('✅ DeepSeek translation service is available');
+    }
+    console.log('✅ Google translation service is available (free)');
+    console.log('✅ Enhanced mobile support enabled');
+    console.log('✅ Short room ID generation enabled');
+    console.log('✅ Audio feedback prevention enabled');
 });
 
 process.on('SIGINT', () => {
-  console.log('Shutting down server gracefully...');
-  console.log(`Active rooms before shutdown: ${rooms.size}`);
+    console.log('Shutting down server gracefully...');
+    console.log(`Active rooms before shutdown: ${rooms.size}`);
 
-  io.emit('server-shutdown');
+    io.emit('server-shutdown');
 
-  setTimeout(() => {
-    server.close(() => {
-      console.log('Server closed');
-      process.exit(0);
-    });
-  }, 1000);
+    setTimeout(() => {
+        server.close(() => {
+            console.log('Server closed');
+            process.exit(0);
+        });
+    }, 1000);
 });

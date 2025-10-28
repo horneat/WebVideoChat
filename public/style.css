@@ -977,3 +977,33 @@ body {
         z-index: 2;
     }
 }
+
+/* Enhanced notification styling for mobile */
+@media (max-width: 768px) {
+    .system-messages {
+        top: 40px !important; /* Lower on mobile to avoid interference */
+        max-width: 95% !important;
+    }
+
+    .system-message {
+        font-size: 12px !important;
+        padding: 8px 12px !important;
+        margin: 3px 0 !important;
+    }
+
+    /* Different colors for different notification types */
+    .system-message.connection-notification {
+        border-left-color: #28a745 !important;
+        background: rgba(40, 167, 69, 0.1) !important;
+    }
+
+    .system-message.disconnection-notification {
+        border-left-color: #dc3545 !important;
+        background: rgba(220, 53, 69, 0.1) !important;
+    }
+
+    .system-message.general-notification {
+        border-left-color: #007bff !important;
+        background: rgba(0, 123, 255, 0.1) !important;
+    }
+}
